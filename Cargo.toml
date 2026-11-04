@@ -3,6 +3,8 @@ name = "tinycode"
 version = "0.1.0"
 edition = "2021"
 description = "A minimal, resource-efficient coding agent CLI, meant to be driven from T3 Code."
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/dasmatus/tinycode"
 
 [dependencies]
 regex = "1"

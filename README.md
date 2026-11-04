@@ -106,3 +106,11 @@ runaway-tool-loop capped by `--max-turns`.
 - single provider call at a time; no MCP, no subagents, no menus — depth of stack is the point
 - model context bounding relies on output caps + history compaction, not a tokeniser
 - the `run` tool shell is `/bin/sh`
+
+## License
+
+tinycode is free software: you can redistribute it and/or modify it under
+the terms of the **GNU Affero General Public License** as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version — `AGPL-3.0-or-later` in SPDX. [LICENSE](LICENSE)
+carries the full text; there is NO WARRANTY, to the extent permitted by law.
