@@ -163,3 +163,69 @@ fn usage_documents_the_t3_surface() {
     assert!(USAGE.contains("--json"));
     assert!(USAGE.contains("TINYCODE_API_KEY"));
 }
+
+// --- OpenCode config integration -----------------------------------------
+
+use tinycode::config::load_opencode;
+
+fn oc_paths(dir: &PathBuf, with_config: bool, with_auth: bool) -> (PathBuf, PathBuf) {
+    let cfg_file = dir.join("opencode.json");
+    let auth_file = dir.join("auth.json");
+    if with_config {
+        fs::write(&cfg_file, "").ok();
+    }
+    if with_auth {
+        fs::write(&auth_file, "").ok();
+    }
+    (cfg_file, auth_file)
+}
+
+#[test]
+fn auth_json_api_keys_are_picked_up() {
+    let dir = tempdir("ocauth");
+    let (cfg_path, auth_path) = oc_paths(&dir.0, false, true);
+    std::fs::write(
+        &auth_path,
+        r#"{"anthropic": {"type": "api", "key": "sk-ant-test"}, "openai": {"type": "api", "key": "sk-oai-test"}}"#,
+    )
+    .expect("auth fixture");
+
+    let env = load_opencode(&cfg_path, &auth_path);
+    assert_eq!(env.provider, Some(tinycode::config::ProviderKind::Anthropic), "first listed provider wins");
+    assert_eq!(env.api_key.as_deref(), Some("sk-ant-test"));
+}
+
+#[test]
+fn opencode_default_model_and_provider_key_are_picked_up() {
+    let dir = tempdir("occfg");
+    let (cfg_path, auth_path) = oc_paths(&dir.0, true, true);
+    std::fs::write(
+        &cfg_path,
+        r#"{"$schema": "x", "model": "openai/gpt-4.1-mini", "provider": {"openai": {"apiKey": "sk-cfgtest"}}}"#,
+    )
+    .expect("opencode fixture");
+
+    let env = load_opencode(&cfg_path, &auth_path);
+    assert_eq!(
+        env.model,
+        Some((tinycode::config::ProviderKind::OpenAi, "gpt-4.1-mini".to_string())),
+        "provider/model split"
+    );
+    assert_eq!(env.provider, Some(tinycode::config::ProviderKind::OpenAi));
+    assert_eq!(env.api_key.as_deref(), Some("sk-cfgtest"));
+}
+
+#[test]
+fn missing_or_garbage_opencode_files_are_ignored() {
+    let dir = tempdir("ocnone");
+    let env = load_opencode(&dir.0.join("nope.json"), &dir.0.join("nopeak.json"));
+    assert_eq!(env.provider, None);
+    assert_eq!(env.api_key, None);
+    assert_eq!(env.model, None);
+
+    fs::write(dir.0.join("broken.json"), "not json {").expect("garbage");
+    let env = load_opencode(&dir.0.join("broken.json"), &dir.0.join("also-gone.json"));
+    assert_eq!(env.provider, None);
+    assert_eq!(env.model, None);
+    assert_eq!(env.api_key, None);
+}

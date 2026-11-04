@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use serde_json::Value;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProviderKind {
@@ -37,6 +38,98 @@ impl ProviderKind {
             Self::OpenAi => "https://api.openai.com/v1",
         }
     }
+}
+
+/// Read OpenCode's own configuration so tinycode is set up by the same
+/// files — `~/.config/opencode/opencode.json` for the default model (and
+/// optional per-provider keys) and `~/.local/share/opencode/auth.json` for
+/// API keys. Env (`TINYCODE_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+/// still wins; these fill the gaps so nothing has to be configured twice.
+#[derive(Debug, Default)]
+pub struct OpenCodeEnv {
+    pub provider: Option<ProviderKind>,
+    pub api_key: Option<String>,
+    /// OpenCode's default model, split as (its provider, bare model id).
+    pub model: Option<(ProviderKind, String)>,
+}
+
+pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
+    let mut env = OpenCodeEnv::default();
+
+    // auth.json: {"anthropic": {"type": "api", "key": "sk-…"}, "openai": {…}}
+    if let Ok(text) = std::fs::read_to_string(auth_path) {
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+            for name in ["anthropic", "openai"] {
+                let Some(entry) = map.get(name) else { continue };
+                let key = entry.get("key").and_then(Value::as_str).filter(|k| !k.is_empty());
+                if let Some(key) = key {
+                    if env.api_key.is_none() {
+                        env.provider =
+                            Some(if name == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi });
+                        env.api_key = Some(key.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // opencode.json: {"model": "anthropic/claude-…", "provider": {"anthropic": {"apiKey": …}}}
+    if let Ok(text) = std::fs::read_to_string(config_path) {
+        if let Ok(cfg) = serde_json::from_str::<Value>(&text) {
+            if env.model.is_none() {
+                env.model = cfg
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .and_then(split_opencode_model);
+            }
+            if env.api_key.is_none() {
+                if let Some(providers) = cfg.get("provider").and_then(Value::as_object) {
+                    for name in ["anthropic", "openai"] {
+                        let key = providers
+                            .get(name)
+                            .and_then(|p| p.get("apiKey"))
+                            .and_then(Value::as_str)
+                            .filter(|k| !k.is_empty());
+                        if let Some(key) = key {
+                            env.provider =
+                                Some(if name == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi });
+                            env.api_key = Some(key.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    env
+}
+
+fn split_opencode_model(raw: &str) -> Option<(ProviderKind, String)> {
+    let (provider, model) = raw.trim().split_once('/')?;
+    let model = model.trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some((ProviderKind::parse(provider)?, model.to_string()))
+    }
+}
+
+/// XDG-aware default locations of OpenCode's configuration.
+pub fn opencode_paths() -> (PathBuf, PathBuf) {
+    let dir = |env: &str, fallback: &str| {
+        std::env::var(env)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(fallback))
+                    .unwrap_or_default()
+            })
+    };
+    (
+        dir("XDG_CONFIG_HOME", ".config").join("opencode").join("opencode.json"),
+        dir("XDG_DATA_HOME", ".local/share").join("opencode").join("auth.json"),
+    )
 }
 
 #[derive(Debug)]
@@ -78,6 +171,11 @@ OPTIONS:
 ENV:
     TINYCODE_API_KEY   |  ANTHROPIC_API_KEY  |  OPENAI_API_KEY
     TINYCODE_MODEL, TINYCODE_PROVIDER, TINYCODE_BASE_URL
+
+OPCODE-STYLE CONFIG (defaults existing per provider are picked up automatically):
+    ~/.local/share/opencode/auth.json     — API keys
+    ~/.config/opencode/opencode.json      — \"model\": \"provider/model-id\"
+    override single paths with TINYCODE_OPENCODE_CONFIG / TINYCODE_OPENCODE_AUTH
 ";
 
 pub fn parse_args(args: &[String]) -> Result<Config, String> {
@@ -172,7 +270,14 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         (None, None) => return Err("no task given (pass a prompt or --task-file)".into()),
     };
 
-    // Provider detection: flag > TINYCODE_PROVIDER > which API key exists.
+    // Provider detection: flag > TINYCODE_PROVIDER > which API key exists
+    // > OpenCode's own config (auth.json / opencode.json).
+    let (oc_config_path, oc_auth_path) = opencode_paths();
+    let (oc_config_path, oc_auth_path) = (
+        std::env::var("TINYCODE_OPENCODE_CONFIG").map(PathBuf::from).unwrap_or(oc_config_path),
+        std::env::var("TINYCODE_OPENCODE_AUTH").map(PathBuf::from).unwrap_or(oc_auth_path),
+    );
+    let oc = load_opencode(&oc_config_path, &oc_auth_path);
     let env_provider = std::env::var("TINYCODE_PROVIDER")
         .ok()
         .and_then(|p| ProviderKind::parse(&p))
@@ -184,19 +289,31 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             } else {
                 None
             }
-        });
+        })
+        .or(oc.provider);
     let provider = provider.or(env_provider).unwrap_or(ProviderKind::Anthropic);
 
     let env_key = std::env::var("TINYCODE_API_KEY").ok();
-    let api_key = match (env_key, provider) {
-        (Some(k), _) => k,
-        (None, ProviderKind::Anthropic) => std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-        (None, ProviderKind::OpenAi) => std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+    let key_from_env = match (env_key, provider) {
+        (Some(k), _) => Some(k),
+        (None, ProviderKind::Anthropic) => std::env::var("ANTHROPIC_API_KEY").ok(),
+        (None, ProviderKind::OpenAi) => std::env::var("OPENAI_API_KEY").ok(),
     };
+    // OpenCode's key applies when it belongs to the provider we resolved to.
+    let oc_key = oc.api_key.filter(|_| oc.provider == Some(provider));
+    let api_key = key_from_env.or(oc_key).unwrap_or_default();
+
     let base_url = base_url.or_else(|| std::env::var("TINYCODE_BASE_URL").ok());
 
     let model = model
         .or_else(|| std::env::var("TINYCODE_MODEL").ok())
+        // OpenCode's default model applies only when its provider matches
+        // the provider this run actually resolves to.
+        .or_else(|| {
+            oc.model
+                .filter(|(kind, _)| *kind == provider)
+                .map(|(_, id)| id)
+        })
         .unwrap_or_else(|| provider.default_model().to_string());
     let base_url = base_url.unwrap_or_else(|| provider.default_base_url().to_string());
 
