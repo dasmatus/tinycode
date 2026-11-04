@@ -1,0 +1,15 @@
+[Unit]
+Description=tinycode agent task %i
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=TINYCODE_AUTO=1
+EnvironmentFile=-%h/.config/tinycode/env
+ExecStart=%h/.local/bin/tinycode run --auto --json --max-turns 30 --root %h --task-file %h/.config/tinycode/tasks/%i.prompt
+MemoryMax=200M
+OOMScoreAdjust=100
+
+# Progress and results land in: journalctl --user -u tinycode@%i
+# Oneshot: the unit exits when the task finishes (0 done, 2 max-turns hit —
+# resume by pointing --session at the file printed in the journal).
