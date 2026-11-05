@@ -1,4 +1,5 @@
 use crate::config::ProviderKind;
+use crate::usage::Usage;
 use serde_json::{json, Value};
 use std::error::Error;
 use std::io::{BufRead, BufReader, Read};
@@ -20,6 +21,8 @@ pub struct Reply {
     pub text: String,
     pub calls: Vec<ToolCall>,
     pub stop: String,
+    /// Tokens the provider reported for this turn, when it reports them.
+    pub usage: Usage,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +113,8 @@ fn build_body(
 
 /// Stream one assistant turn. Tool-call argument chunks are reassembled
 /// incrementally; system memory stays proportional to the response, not to
-/// any fixed buffer.
+/// any fixed buffer. `session_tag` tags the run on the wire — OpenCode's Go
+/// gateway routes requests per session via `x-opencode-session`.
 pub fn stream(
     kind: ProviderKind,
     api_key: &str,
@@ -119,6 +123,7 @@ pub fn stream(
     system: &str,
     tools: &[ToolSpec],
     messages: &[Value],
+    session_tag: &str,
     on_text: impl FnMut(&str),
 ) -> Result<Reply, Box<dyn Error>> {
     let url = chat_url(kind, base_url);
@@ -135,6 +140,10 @@ pub fn stream(
     };
     if kind == ProviderKind::OpenAi && !api_key.is_empty() {
         req = req.set("Authorization", &format!("Bearer {api_key}"));
+    }
+    if is_opencode_gateway(url.as_str()) {
+        let tag = if session_tag.is_empty() { "tinycode" } else { session_tag };
+        req = req.set("x-opencode-session", tag);
     }
     let body = build_body(kind, model, system, tools, messages);
     let resp = match req.send_json(&body) {
@@ -157,6 +166,11 @@ pub fn stream(
     }
 }
 
+/// The OpenCode Go gateway is OpenAI-compatible but routes per session id.
+pub fn is_opencode_gateway(url: &str) -> bool {
+    url.contains("opencode.ai/inference") && url.contains("/openai/")
+}
+
 fn stream_anthropic(
     mut reader: impl BufRead,
     mut on_text: impl FnMut(&str),
@@ -169,6 +183,7 @@ fn stream_anthropic(
     }
     let mut blocks: Vec<Block> = Vec::new();
     let mut stop = String::from("end_turn");
+    let mut anthropic = crate::usage::AnthropicUsage::default();
     let mut line = String::new();
 
     loop {
@@ -185,6 +200,12 @@ fn stream_anthropic(
             continue;
         }
         let event: Value = serde_json::from_str(data)?;
+        Usage::from_anthropic_event(&event, &mut anthropic);
+        // Error payloads ({"type":"error","error":{…}}, or bare {"error":…}).
+        if let Some(err) = event.get("error").filter(|e| e.is_object()) {
+            let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+            return Err(format!("provider error: {msg}").into());
+        }
         match event.get("type").and_then(Value::as_str) {
             Some("content_block_start") => {
                 let cb = event.get("content_block").cloned().unwrap_or(Value::Null);
@@ -255,6 +276,10 @@ fn stream_anthropic(
         text: text_parts.join("\n\n"),
         calls,
         stop,
+        usage: Usage {
+            input_tokens: anthropic.input,
+            output_tokens: anthropic.output,
+        },
     })
 }
 
@@ -269,6 +294,7 @@ fn stream_openai(
     }
     let mut text = String::new();
     let mut stop = String::from("stop");
+    let mut usage = Usage::default();
     let mut calls: Vec<(usize, Call)> = Vec::new();
     let mut line = String::new();
 
@@ -289,6 +315,15 @@ fn stream_openai(
             break;
         }
         let event: Value = serde_json::from_str(data)?;
+        // Bare error payloads like {"error":{"message":…}}.
+        if let Some(err) = event.get("error").filter(|e| e.is_object()) {
+            let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+            return Err(format!("provider error: {msg}").into());
+        }
+        let new_usage = Usage::from_openai_chunk(&event);
+        if !new_usage.is_zero() {
+            usage = new_usage;
+        }
         let choices = event
             .get("choices")
             .and_then(Value::as_array)
@@ -355,6 +390,7 @@ fn stream_openai(
             .map(|(_, c)| ToolCall { id: c.id, name: c.name, arguments: c.args })
             .collect(),
         stop,
+        usage,
     })
 }
 

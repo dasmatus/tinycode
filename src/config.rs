@@ -45,27 +45,66 @@ impl ProviderKind {
 /// optional per-provider keys) and `~/.local/share/opencode/auth.json` for
 /// API keys. Env (`TINYCODE_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
 /// still wins; these fill the gaps so nothing has to be configured twice.
+///
+/// Provider ids beyond kind names are reused too: `opencode-go` maps
+/// onto the OpenAI-compatible Go gateway (see `provider_base_url`).
 #[derive(Debug, Default)]
 pub struct OpenCodeEnv {
     pub provider: Option<ProviderKind>,
     pub api_key: Option<String>,
     /// OpenCode's default model, split as (its provider, bare model id).
     pub model: Option<(ProviderKind, String)>,
+    /// The provider id whose settings resolved the key, when meaningful
+    /// (e.g. "opencode-go"); selects the gateway base URL.
+    pub provider_id: Option<String>,
+    /// Base URL implied by the provider id, when id-specific.
+    pub base_url: Option<String>,
+}
+
+/// Builtin gateway endpoints for OpenCode provider ids that are not plain
+/// kind names. The Go gateway is OpenAI-compatible chat-completions.
+pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/inference/go/openai/v1";
+
+pub fn provider_base_url(id: &str) -> Option<&'static str> {
+    match id {
+        "anthropic" => Some(ProviderKind::Anthropic.default_base_url()),
+        "openai" => Some(ProviderKind::OpenAi.default_base_url()),
+        "opencode-go" => Some(OPENCODE_GO_BASE_URL),
+        _ => None,
+    }
+}
+
+fn id_to_kind(id: &str) -> Option<ProviderKind> {
+    ProviderKind::parse(id).or_else(|| {
+        if id == "opencode-go" {
+            Some(ProviderKind::OpenAi)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
     let mut env = OpenCodeEnv::default();
 
-    // auth.json: {"anthropic": {"type": "api", "key": "sk-…"}, "openai": {…}}
+    // auth.json: {"anthropic": {"type": "api", "key": "sk-…"}, "opencode-go": {…}}
     if let Ok(text) = std::fs::read_to_string(auth_path) {
         if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
-            for name in ["anthropic", "openai"] {
-                let Some(entry) = map.get(name) else { continue };
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            // Prefer plain kind names, then opencode-go, then anything odd.
+            entries.sort_by_key(|(name, _)| match name.as_str() {
+                "anthropic" | "openai" => 0,
+                "opencode-go" => 1,
+                _ => 2,
+            });
+            for (name, entry) in entries {
                 let key = entry.get("key").and_then(Value::as_str).filter(|k| !k.is_empty());
-                if let Some(key) = key {
-                    if env.api_key.is_none() {
-                        env.provider =
-                            Some(if name == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi });
+                let Some(key) = key else { continue };
+                if env.api_key.is_none() {
+                    if let Some(kind) = id_to_kind(name) {
+                        env.provider = Some(kind);
+                        env.provider_id = Some(name.to_string());
+                        env.base_url = provider_base_url(name).map(|b| b.to_string());
                         env.api_key = Some(key.to_string());
                     }
                 }
@@ -73,7 +112,7 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
         }
     }
 
-    // opencode.json: {"model": "anthropic/claude-…", "provider": {"anthropic": {"apiKey": …}}}
+    // opencode.json: {"model": "opencode-go/glm-…", "provider": {"anthropic": {"apiKey": …}}}
     if let Ok(text) = std::fs::read_to_string(config_path) {
         if let Ok(cfg) = serde_json::from_str::<Value>(&text) {
             if env.model.is_none() {
@@ -84,16 +123,19 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
             }
             if env.api_key.is_none() {
                 if let Some(providers) = cfg.get("provider").and_then(Value::as_object) {
-                    for name in ["anthropic", "openai"] {
+                    for name in ["anthropic", "openai", "opencode-go"] {
                         let key = providers
                             .get(name)
                             .and_then(|p| p.get("apiKey"))
                             .and_then(Value::as_str)
                             .filter(|k| !k.is_empty());
                         if let Some(key) = key {
-                            env.provider =
-                                Some(if name == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi });
-                            env.api_key = Some(key.to_string());
+                            if let Some(kind) = id_to_kind(name) {
+                                env.provider = Some(kind);
+                                env.provider_id = Some(name.to_string());
+                                env.base_url = provider_base_url(name).map(|b| b.to_string());
+                                env.api_key = Some(key.to_string());
+                            }
                             break;
                         }
                     }
@@ -105,14 +147,15 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
     env
 }
 
+/// Split "provider-id/model" (e.g. "opencode-go/glm-5.3-flash"),
+/// including kind names ("anthropic/claude-…").
 fn split_opencode_model(raw: &str) -> Option<(ProviderKind, String)> {
     let (provider, model) = raw.trim().split_once('/')?;
     let model = model.trim();
     if model.is_empty() {
-        None
-    } else {
-        Some((ProviderKind::parse(provider)?, model.to_string()))
+        return None;
     }
+    id_to_kind(provider).map(|kind| (kind, model.to_string()))
 }
 
 /// XDG-aware default locations of OpenCode's configuration.
@@ -138,6 +181,12 @@ pub struct Config {
     pub api_key: String,
     pub model: String,
     pub base_url: String,
+    /// OpenCode provider id the settings reuse resolved, when any
+    /// ("opencode-go"); labels usage records.
+    pub provider_id: Option<String>,
+    /// Where usage records go; None means `usage::file_path()`
+    /// (TINYCODE_USAGE_FILE or ~/.local/share/tinycode/usage.jsonl).
+    pub usage_file: Option<PathBuf>,
     /// Workspace root, canonicalized; every tool path must stay inside it.
     pub root: PathBuf,
     /// When false, mutating tools (write/edit/run) are refused.
@@ -154,6 +203,7 @@ tinycode — a minimal coding agent, meant to be driven from T3 Code.
 
 USAGE:
     tinycode run [OPTIONS] \"<task prompt>\"
+    tinycode usage [OPTIONS]   summarize recorded provider usage
 
 OPTIONS:
     -f, --task-file <PATH>   read the task prompt from a file (\"-\" for stdin)
@@ -173,9 +223,13 @@ ENV:
     TINYCODE_MODEL, TINYCODE_PROVIDER, TINYCODE_BASE_URL
 
 OPCODE-STYLE CONFIG (defaults existing per provider are picked up automatically):
-    ~/.local/share/opencode/auth.json     — API keys
+    ~/.local/share/opencode/auth.json     — API keys (incl. the opencode-go entry)
     ~/.config/opencode/opencode.json      — \"model\": \"provider/model-id\"
     override single paths with TINYCODE_OPENCODE_CONFIG / TINYCODE_OPENCODE_AUTH
+
+USAGE RECORDS:
+    every provider turn is appended to ~/.local/share/tinycode/usage.jsonl
+    (override with TINYCODE_USAGE_FILE); summarize with \"tinycode usage\"
 ";
 
 pub fn parse_args(args: &[String]) -> Result<Config, String> {
@@ -293,6 +347,8 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         .or(oc.provider);
     let provider = provider.or(env_provider).unwrap_or(ProviderKind::Anthropic);
 
+    let provider_id = oc.provider_id.filter(|_| oc.provider == Some(provider));
+    let resolved_base = oc.base_url.filter(|_| oc.provider == Some(provider));
     let env_key = std::env::var("TINYCODE_API_KEY").ok();
     let key_from_env = match (env_key, provider) {
         (Some(k), _) => Some(k),
@@ -315,7 +371,10 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
                 .map(|(_, id)| id)
         })
         .unwrap_or_else(|| provider.default_model().to_string());
-    let base_url = base_url.unwrap_or_else(|| provider.default_base_url().to_string());
+    // A provider-id gateway applies when no explicit URL was chosen.
+    let base_url = base_url
+        .or(resolved_base)
+        .unwrap_or_else(|| provider.default_base_url().to_string());
 
     let root = root.unwrap_or_else(|| PathBuf::from("."));
     let root = std::fs::canonicalize(&root).map_err(|e| format!("--root {}: {e}", root.display()))?;
@@ -325,6 +384,8 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         api_key,
         model,
         base_url,
+        provider_id,
+        usage_file: None,
         root,
         auto,
         max_turns: max_turns.clamp(1, 1000),

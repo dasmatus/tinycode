@@ -1,9 +1,13 @@
 use tinycode::agent::Event;
-use tinycode::{agent, config};
+use tinycode::{agent, config, usage};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // Subcommands own their flags (including --help), so dispatch first.
+    if args.first().map(|a| a == "usage").unwrap_or(false) {
+        std::process::exit(usage::cli(&args[1..]));
+    }
     if args.iter().any(|a| a == "-h" || a == "--help") {
         print!("{}", config::USAGE);
         std::process::exit(0);

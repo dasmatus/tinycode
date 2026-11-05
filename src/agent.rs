@@ -2,9 +2,11 @@ use crate::config::Config;
 use crate::provider::{self, ResultMsg};
 use crate::store::{self, Session};
 use crate::tools::{self, ToolCtx};
+use crate::usage;
 use serde_json::{json, Value};
 use std::error::Error;
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub enum Event {
     Started { session: String },
@@ -86,6 +88,43 @@ impl Agent {
         &self.session_path
     }
 
+    /// Short per-run tag sent to session-routing gateways and kept in usage
+    /// records: the session file's file name (unique per run, no paths).
+    fn session_tag(&self) -> String {
+        self.session_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("tinycode")
+            .to_string()
+    }
+
+    /// Append one usage record for this provider turn. Recording never
+    /// fails the run: a logging error is only reported as a warning.
+    fn record_turn(&self, started: Instant, ok: bool, error: Option<String>, u: usage::Usage) {
+        let rec = usage::TurnRecord {
+            provider: self.provider_label(),
+            kind: self.cfg.provider.name().to_string(),
+            model: self.cfg.model.clone(),
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            turn: self.turns,
+            duration_ms: started.elapsed().as_millis() as u64,
+            ok,
+            error,
+            session: self.session_tag(),
+        };
+        let path = self.cfg.usage_file.clone().unwrap_or_else(usage::file_path);
+        if let Err(e) = usage::record_to(&path, &rec) {
+            eprintln!("warn: usage recording failed: {e}");
+        }
+    }
+
+    /// Provider identifier for usage records: OpenCode ids flow through when
+    /// the settings reuse resolved one ("opencode-go"), else the wire kind.
+    fn provider_label(&self) -> String {
+        self.cfg.provider_id.clone().unwrap_or_else(|| self.cfg.provider.name().to_string())
+    }
+
     /// Returns the process exit code: 0 done, 1 hard error, 2 max turns hit.
     pub fn run(&mut self, report: &mut dyn FnMut(&Event)) -> Result<i32, Box<dyn Error>> {
         report(&Event::Started { session: self.session_path.display().to_string() });
@@ -101,7 +140,8 @@ impl Agent {
             compact_history(&mut self.messages);
 
             let kind = self.cfg.provider;
-            let reply = provider::stream(
+            let started = Instant::now();
+            let reply = match provider::stream(
                 kind,
                 &self.cfg.api_key,
                 &self.cfg.model,
@@ -109,8 +149,18 @@ impl Agent {
                 &self.system,
                 &tools_spec,
                 &self.messages,
+                &self.session_tag(),
                 |_delta: &str| {},
-            )?;
+            ) {
+                Ok(reply) => {
+                    self.record_turn(started, true, None, reply.usage.clone());
+                    reply
+                }
+                Err(e) => {
+                    self.record_turn(started, false, Some(e.to_string()), usage::Usage::default());
+                    return Err(e);
+                }
+            };
             self.messages.push(provider::assistant_message(kind, &reply));
             if !reply.text.is_empty() {
                 report(&Event::Assistant(reply.text.clone()));

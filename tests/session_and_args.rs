@@ -75,6 +75,8 @@ fn agent_guards_session_provider_mismatch() {
         api_key: "k".into(),
         model: "m".into(),
         base_url: "http://127.0.0.1:1".into(),
+        provider_id: None,
+        usage_file: None,
         root,
         auto: true,
         max_turns: 3,
