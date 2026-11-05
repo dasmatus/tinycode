@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use tinycode::agent::{Agent, Event};
 use tinycode::config::{Config, ProviderKind};
 
+
 struct TempDir(PathBuf);
 
 impl Drop for TempDir {
@@ -111,6 +112,9 @@ fn config(kind: ProviderKind, base_url: String, root: PathBuf) -> Config {
         api_key: "test-key".into(),
         model: "test-model".into(),
         base_url,
+        provider_id: None,
+        // Every test records usage into its own temp dir, never ~/.local.
+        usage_file: Some(root.join("usage.jsonl")),
         root,
         auto: true,
         max_turns: 6,
@@ -269,4 +273,103 @@ fn max_turns_limit_stops_runaway_loops() {
     let session: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(file).expect("session file")).expect("session");
     assert_eq!(session["messages"].as_array().expect("msgs").len() >= 1, true);
+}
+
+/// Usage capture: token counts reported by the provider end up as one
+/// JSONL record per turn in the configured usage file, with model and turn.
+#[test]
+fn usage_records_openai_tokens() {
+    let dir = tempdir("usage-openai");
+    let turn = openai_sse(vec![
+        serde_json::json!({"choices":[{"index":0,"delta":{"content":"pong."}}]}),
+        serde_json::json!({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":19,"completion_tokens":3}}),
+        serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+    ]);
+    let (addr, _requests) = mock_server(vec![turn]);
+
+    let usage_path = dir.0.join("usage.jsonl");
+
+    let mut agent = Agent::new(config(
+        ProviderKind::OpenAi,
+        format!("http://{addr}"),
+        dir.0.clone(),
+    ))
+    .expect("agent");
+    let code = agent.run(&mut |_event| {}).expect("run");
+    assert_eq!(code, 0);
+
+    let text = fs::read_to_string(&usage_path).expect("usage file written");
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("record is valid JSON"))
+        .collect();
+    assert_eq!(records.len(), 1, "one turn → one usage record");
+    let rec = &records[0];
+    assert_eq!(rec["provider"], "openai");
+    assert_eq!(rec["model"], "test-model");
+    assert_eq!(rec["in"], 19);
+    assert_eq!(rec["out"], 3);
+    assert_eq!(rec["ok"], true);
+    assert_eq!(rec["turn"], 1);
+    assert!(rec["session"].as_str().map_or(false, |s| s.contains(".json")));
+}
+
+/// Same expectation for the Anthropic dialect (message_start input
+/// tokens + message_delta output tokens).
+#[test]
+fn usage_records_anthropic_tokens() {
+    let dir = tempdir("usage-anthropic");
+    let turn = anthropic_sse(vec![
+        serde_json::json!({"type":"message_start","message":{"usage":{"input_tokens":42}}}),
+        serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"text"}}),
+        serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}),
+        serde_json::json!({"type":"content_block_stop","index":0}),
+        serde_json::json!({"type":"message_delta","usage":{"output_tokens":7},"delta":{"stop_reason":"end_turn"}}),
+        serde_json::json!({"type":"message_stop"}),
+    ]);
+    let (addr, _requests) = mock_server(vec![turn]);
+
+    let usage_path = dir.0.join("usage.jsonl");
+
+    let mut agent = Agent::new(config(
+        ProviderKind::Anthropic,
+        format!("http://{addr}"),
+        dir.0.clone(),
+    ))
+    .expect("agent");
+    let code = agent.run(&mut |_event| {}).expect("run");
+    assert_eq!(code, 0);
+
+    let text = fs::read_to_string(&usage_path).expect("usage file written");
+    let rec: serde_json::Value =
+        serde_json::from_str(text.lines().next().expect("one line")).expect("record");
+    assert_eq!(rec["provider"], "anthropic");
+    assert_eq!(rec["in"], 42);
+    assert_eq!(rec["out"], 7);
+    assert_eq!(rec["ok"], true);
+}
+
+/// A failed provider turn still produces a record, marked not-ok with a
+/// short error, so usage never loses track of attempts. The Anthropic
+/// dialect surfaces stream errors; we use it to trigger a failing turn.
+#[test]
+fn usage_records_failed_turns() {
+    let dir = tempdir("usage-failed");
+    let (addr, _requests) = mock_server(vec![]); // serves nothing → script exhausted
+    let usage_path = dir.0.join("usage.jsonl");
+
+    let mut agent = Agent::new(config(
+        ProviderKind::Anthropic,
+        format!("http://{addr}"),
+        dir.0.clone(),
+    ))
+    .expect("agent");
+    let result = agent.run(&mut |_event| {});
+    assert!(result.is_err(), "exhausted script errors out");
+
+    let text = fs::read_to_string(&usage_path).expect("usage file written even on failure");
+    let rec: serde_json::Value =
+        serde_json::from_str(text.lines().next().expect("one line")).expect("record");
+    assert_eq!(rec["ok"], false);
+    assert!(rec["err"].as_str().map_or(false, |e| !e.is_empty()));
 }

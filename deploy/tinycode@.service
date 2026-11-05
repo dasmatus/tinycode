@@ -5,7 +5,10 @@ After=network-online.target
 [Service]
 Type=oneshot
 Environment=TINYCODE_AUTO=1
+# Keys come from OpenCode's own store, refreshed before every run.
+Environment=TINYCODE_OPENCODE_AUTH=%h/.config/tinycode/opencode-auth.json
 EnvironmentFile=-%h/.config/tinycode/env
+ExecStartPre=-%h/.local/bin/tinycode-opencode-auth
 ExecStart=%h/.local/bin/tinycode run --auto --json --max-turns 30 --root %h --task-file %h/.config/tinycode/tasks/%i.prompt
 MemoryMax=200M
 OOMScoreAdjust=100
@@ -13,3 +16,4 @@ OOMScoreAdjust=100
 # Progress and results land in: journalctl --user -u tinycode@%i
 # Oneshot: the unit exits when the task finishes (0 done, 2 max-turns hit —
 # resume by pointing --session at the file printed in the journal).
+# Token usage per turn: tinycode usage (reads ~/.local/share/tinycode/usage.jsonl)
