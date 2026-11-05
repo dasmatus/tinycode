@@ -408,7 +408,8 @@ fn collect_files(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         match entry.file_type() {
-            Ok(t) if t.is_dir() => collect_files(&entry.path(), depth - 1, out),
+            Ok(t) if t.is_dir() && depth > 0 => collect_files(&entry.path(), depth - 1, out),
+            Ok(t) if t.is_dir() => {}
             Ok(t) if t.is_file() => out.push(entry.path()),
             _ => {}
         }
