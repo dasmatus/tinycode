@@ -196,6 +196,10 @@ pub struct Config {
     pub quiet: bool,
     pub session_file: Option<PathBuf>,
     pub task: String,
+    /// Full replacement for the built-in system prompt. `{root}` is
+    /// substituted with the workspace root. When None the default prompt
+    /// is used. Set via `--system-prompt-file` or `TINYCODE_SYSTEM_PROMPT`.
+    pub system_prompt: Option<String>,
 }
 
 pub const USAGE: &str = "\
@@ -215,16 +219,20 @@ OPTIONS:
         --max-turns <N>      model turns per run (default 24)
     -s, --session <FILE>     continue the session file shown in the last run,
                              or listed in .tinycode/sessions/
+        --system-prompt-file <PATH>
+                             replace the built-in system prompt with the
+                             contents of this file ({root} is substituted)
         --json               NDJSON events on stdout instead of human output
         --quiet              suppress stderr narration
 
 ENV:
     TINYCODE_API_KEY   |  ANTHROPIC_API_KEY  |  OPENAI_API_KEY
     TINYCODE_MODEL, TINYCODE_PROVIDER, TINYCODE_BASE_URL
+    TINYCODE_SYSTEM_PROMPT   full system prompt text (overrides file flag)
 
 OPCODE-STYLE CONFIG (defaults existing per provider are picked up automatically):
     ~/.local/share/opencode/auth.json     — API keys (incl. the opencode-go entry)
-    ~/.config/opencode/opencode.json      — \"model\": \"provider/model-id\"
+    ~/.config/opencode/opencode.json      — \"model\", \"provider/model-id\"
     override single paths with TINYCODE_OPENCODE_CONFIG / TINYCODE_OPENCODE_AUTH
 
 USAGE RECORDS:
@@ -251,6 +259,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
     let mut quiet = false;
     let mut session_file: Option<PathBuf> = None;
     let mut task_file: Option<PathBuf> = None;
+    let mut system_prompt_file: Option<PathBuf> = None;
     let mut task: Option<String> = None;
 
     let mut i = 0;
@@ -261,7 +270,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             "--json" => json_mode = true,
             "--quiet" => quiet = true,
             "--model" | "--base-url" | "--provider" | "--root" | "--max-turns" | "-f"
-            | "--task-file" => {
+            | "--task-file" | "--system-prompt-file" => {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| format!("missing value for {arg}"))?;
@@ -281,6 +290,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
                             .parse()
                             .map_err(|_| format!("--max-turns: '{value}' is not a number"))?
                     }
+                    "--system-prompt-file" => system_prompt_file = Some(PathBuf::from(value)),
                     _ => task_file = Some(PathBuf::from(value)),
                 }
             }
@@ -322,6 +332,15 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         }
         (None, Some(t)) => t,
         (None, None) => return Err("no task given (pass a prompt or --task-file)".into()),
+    };
+
+    // System prompt override: flag file > env content > None (use default).
+    let system_prompt = if let Some(path) = system_prompt_file {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("--system-prompt-file {}: {e}", path.display()))?;
+        Some(text.trim_end().to_string())
+    } else {
+        std::env::var("TINYCODE_SYSTEM_PROMPT").ok().filter(|s| !s.is_empty())
     };
 
     // Provider detection: flag > TINYCODE_PROVIDER > which API key exists
@@ -393,6 +412,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         quiet,
         session_file,
         task,
+        system_prompt,
     })
 }
 
