@@ -48,7 +48,7 @@ pub struct Agent {
     cfg: Config,
     tool_ctx: ToolCtx,
     system: String,
-    messages: Vec<Value>,
+    pub messages: Vec<Value>,
     session_path: PathBuf,
     turns: u32,
 }
@@ -129,6 +129,11 @@ impl Agent {
     pub fn run(&mut self, report: &mut dyn FnMut(&Event)) -> Result<i32, Box<dyn Error>> {
         report(&Event::Started { session: self.session_path.display().to_string() });
         let tools_spec = tools::definitions();
+
+        // If this is a fresh session with no messages, add the task as the first user message
+        if self.messages.is_empty() && !self.cfg.task.is_empty() {
+            self.messages.push(json!({"role": "user", "content": self.cfg.task.clone()}));
+        }
 
         loop {
             self.turns += 1;

@@ -175,7 +175,7 @@ pub fn opencode_paths() -> (PathBuf, PathBuf) {
     )
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub provider: ProviderKind,
     pub api_key: String,
