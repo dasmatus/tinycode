@@ -33,6 +33,9 @@ through canonicalization). Mutating tools are refused unless you pass
 - `run` kills timed-out commands; grandchild-safe (readers abandoned at process exit)
 - sessions saved by atomic rename at end of each turn — a crash mid-turn just replays that turn on resume
 
+Release profile follows the Rust Performance Book binary-size recommendations
+(`opt-level = "z"`, `lto = true`, `panic = "abort"`, `codegen-units = 1`, `strip = true`).
+
 ## Build
 
 Any Linux box with Rust:
