@@ -61,6 +61,7 @@ says `static-pie linked, stripped`. scp it; no runtime deps.
 | `TINYCODE_PROVIDER`  | `anthropic` or `openai` (default: which key exists)             |
 | `TINYCODE_MODEL`     | model name (default: provider default)                          |
 | `TINYCODE_BASE_URL`  | base URL without the versioned path — points it at any OpenAI-compatible endpoint (`http://127.0.0.1:11434/v1`, LM Studio, a router…) |
+| `TINYCODE_SYSTEM_PROMPT` | full system prompt text (overrides built-in; `{root}` substituted) |
 
 Provider wire formats: Anthropic Messages and OpenAI Chat Completions, both
 streaming, with tool-call chunk reassembly covered by tests.
@@ -82,6 +83,31 @@ tinycode run --auto --json --max-turns 24 \
 - `-s/--session <FILE>` — continue; the file path is in every event
 - without `--auto`, write/edit/run are refused with a message telling the
   model to ask for permission — so you can run it read-only first
+- `--system-prompt-file <PATH>` — replace the built-in system prompt
+
+## System prompt override
+
+By default tinycode uses a short built-in system prompt. To force persistent
+behaviour (do not stop until the task is fully complete) and to instruct the
+agent to use all T3 Code features (worktrees, commits, pull requests via `gh`,
+etc.) pass a custom system prompt:
+
+```sh
+# Via file (recommended for long prompts)
+tinycode run --system-prompt-file /path/to/prompt.txt --auto --json "implement the feature"
+
+# Or via environment variable (content)
+export TINYCODE_SYSTEM_PROMPT='You are tinycode operating under T3 Code.
+Workspace root: {root}
+Do not stop until the task is fully complete and verified.
+Use the run tool for git worktree, commit, push, and gh pr create.
+Prefer T3 Code tracked operations. ...'
+tinycode run --auto "fix the tests"
+```
+
+`{root}` in the custom prompt is replaced with the actual workspace root.
+When no override is given the built-in prompt already encourages the agent
+not to stop early and to use shell for git/T3-compatible operations.
 
 ## Running under systemd (VPS)
 
