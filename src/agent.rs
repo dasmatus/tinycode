@@ -150,6 +150,7 @@ impl Agent {
                 &tools_spec,
                 &self.messages,
                 &self.session_tag(),
+                None,
                 |_delta: &str| {},
             ) {
                 Ok(reply) => {

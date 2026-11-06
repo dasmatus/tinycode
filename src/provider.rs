@@ -54,8 +54,9 @@ fn build_body(
     system: &str,
     tools: &[ToolSpec],
     messages: &[Value],
+    temperature: Option<f32>,
 ) -> Value {
-    match kind {
+    let mut body = match kind {
         ProviderKind::Anthropic => {
             let mut body = json!({
                 "model": model,
@@ -108,13 +109,21 @@ fn build_body(
             }
             body
         }
+    };
+    // Both wire formats take the same top-level knob. Left out when the
+    // caller has no preference, so the provider's default applies.
+    if let Some(t) = temperature {
+        body["temperature"] = json!(t);
     }
+    body
 }
 
 /// Stream one assistant turn. Tool-call argument chunks are reassembled
 /// incrementally; system memory stays proportional to the response, not to
 /// any fixed buffer. `session_tag` tags the run on the wire — OpenCode's Go
 /// gateway routes requests per session via `x-opencode-session`.
+/// `temperature` goes on the wire only when set; `None` keeps the
+/// provider's default.
 pub fn stream(
     kind: ProviderKind,
     api_key: &str,
@@ -124,6 +133,7 @@ pub fn stream(
     tools: &[ToolSpec],
     messages: &[Value],
     session_tag: &str,
+    temperature: Option<f32>,
     on_text: impl FnMut(&str),
 ) -> Result<Reply, Box<dyn Error>> {
     let url = chat_url(kind, base_url);
@@ -145,7 +155,7 @@ pub fn stream(
         let tag = if session_tag.is_empty() { "tinycode" } else { session_tag };
         req = req.set("x-opencode-session", tag);
     }
-    let body = build_body(kind, model, system, tools, messages);
+    let body = build_body(kind, model, system, tools, messages, temperature);
     let resp = match req.send_json(&body) {
         Ok(r) => r,
         Err(ureq::Error::Status(status, resp)) => {
