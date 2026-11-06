@@ -73,7 +73,7 @@ impl Agent {
         } else {
             Vec::new()
         };
-        let system = system_prompt(&cfg.root.display().to_string());
+        let system = system_prompt(&cfg);
         Ok(Self {
             tool_ctx: ToolCtx { root: cfg.root.clone(), auto: cfg.auto },
             cfg,
@@ -207,7 +207,11 @@ impl Agent {
     }
 }
 
-fn system_prompt(root: &str) -> String {
+fn system_prompt(cfg: &Config) -> String {
+    let root = cfg.root.display().to_string();
+    if let Some(custom) = &cfg.system_prompt {
+        return custom.replace("{root}", &root);
+    }
     format!(
         "You are tinycode, a minimal coding agent. You work inside the workspace root {root}.\n\
          Tools may only touch paths inside that root. Rules:\n\
@@ -215,6 +219,7 @@ fn system_prompt(root: &str) -> String {
          - Edit precisely with edit; create files with write; check compile/test results with run.\n\
          - Keep 'run' output small (filters, pipes); timestamps will be capped anyway.\n\
          - Mutating tools are only permitted when the operator passed --auto; if refused, say so.\n\
+         - Do not stop until the task is fully complete and verified. Prefer using the run tool for git, tests, and any operations that T3 Code can track (worktrees, commits, pull requests via gh).\n\
          - Once the task is complete, reply with a short plain-text summary and no tool calls."
     )
 }
