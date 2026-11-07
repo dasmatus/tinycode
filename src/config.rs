@@ -226,13 +226,32 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
 
 /// Split "provider-id/model" (e.g. "opencode-go/glm-5.3-flash"),
 /// including kind names ("anthropic/claude-…").
-fn split_opencode_model(raw: &str) -> Option<(ProviderKind, String)> {
+pub fn split_opencode_model(raw: &str) -> Option<(ProviderKind, String)> {
     let (provider, model) = raw.trim().split_once('/')?;
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
     id_to_kind(provider).map(|kind| (kind, model.to_string()))
+}
+
+/// Resolve an OpenCode-style model spec (`provider-id/model`) into routing
+/// defaults. Returns `(provider_kind, provider_id, base_url, bare_model)`.
+/// Explicit CLI/env overrides for provider/base_url still take precedence at
+/// the call site.
+pub fn resolve_model_spec(raw: &str) -> Option<(ProviderKind, String, Option<String>, String)> {
+    let (provider, model) = raw.trim().split_once('/')?;
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let kind = id_to_kind(provider)?;
+    Some((
+        kind,
+        provider.to_string(),
+        provider_base_url(provider).map(|b| b.to_string()),
+        model.to_string(),
+    ))
 }
 
 /// XDG-aware default locations of OpenCode's configuration.
@@ -420,7 +439,10 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         std::env::var("TINYCODE_SYSTEM_PROMPT").ok().filter(|s| !s.is_empty())
     };
 
-    // Provider detection: flag > TINYCODE_PROVIDER > which API key exists
+    let explicit_provider = provider.is_some();
+    let explicit_base_url = base_url.is_some();
+
+    // Provider detection: flag > qualified model spec > TINYCODE_PROVIDER > which API key exists
     // > OpenCode's own config (auth.json / opencode.json).
     let (oc_config_path, oc_auth_path) = opencode_paths();
     let (oc_config_path, oc_auth_path) = (
@@ -428,6 +450,12 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         std::env::var("TINYCODE_OPENCODE_AUTH").map(PathBuf::from).unwrap_or(oc_auth_path),
     );
     let oc = load_opencode(&oc_config_path, &oc_auth_path);
+
+    // Accept OpenCode/T3-style qualified model IDs (e.g. `opencode-go/glm-5.2`)
+    // from --model or TINYCODE_MODEL and resolve routing defaults from them.
+    let raw_model = model.or_else(|| std::env::var("TINYCODE_MODEL").ok());
+    let model_spec = raw_model.as_deref().and_then(resolve_model_spec);
+
     let env_provider = std::env::var("TINYCODE_PROVIDER")
         .ok()
         .and_then(|p| ProviderKind::parse(&p))
@@ -441,10 +469,24 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             }
         })
         .or(oc.provider);
-    let provider = provider.or(env_provider).unwrap_or(ProviderKind::Anthropic);
+    let provider = provider
+        .or_else(|| model_spec.as_ref().map(|(k, _, _, _)| *k))
+        .or(env_provider)
+        .unwrap_or(ProviderKind::Anthropic);
 
-    let provider_id = oc.provider_id.filter(|_| oc.provider == Some(provider));
-    let resolved_base = oc.base_url.filter(|_| oc.provider == Some(provider));
+    let mut provider_id = oc.provider_id.filter(|_| oc.provider == Some(provider));
+    let mut resolved_base = oc.base_url.filter(|_| oc.provider == Some(provider));
+    if !explicit_provider && !explicit_base_url {
+        if let Some((kind, id, spec_base, _)) = &model_spec {
+            if *kind == provider {
+                provider_id = Some(id.clone());
+                if resolved_base.is_none() {
+                    resolved_base = spec_base.clone();
+                }
+            }
+        }
+    }
+
     let env_key = std::env::var("TINYCODE_API_KEY")
         .ok()
         .or_else(|| std::env::var("OPENCODE_API_KEY").ok());
@@ -459,16 +501,23 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
 
     let base_url = base_url.or_else(|| std::env::var("TINYCODE_BASE_URL").ok());
 
-    let model = model
-        .or_else(|| std::env::var("TINYCODE_MODEL").ok())
-        // OpenCode's default model applies only when its provider matches
-        // the provider this run actually resolves to.
-        .or_else(|| {
-            oc.model
-                .filter(|(kind, _)| *kind == provider)
-                .map(|(_, id)| id)
-        })
-        .unwrap_or_else(|| provider.default_model().to_string());
+    let model = if let Some((kind, _, _, bare)) = model_spec {
+        if kind == provider || !explicit_provider {
+            bare
+        } else {
+            raw_model.unwrap_or_default()
+        }
+    } else {
+        raw_model
+            // OpenCode's default model applies only when its provider matches
+            // the provider this run actually resolves to.
+            .or_else(|| {
+                oc.model
+                    .filter(|(kind, _)| *kind == provider)
+                    .map(|(_, id)| id)
+            })
+            .unwrap_or_else(|| provider.default_model().to_string())
+    };
     // A provider-id gateway applies when no explicit URL was chosen.
     let base_url = base_url
         .or(resolved_base)
