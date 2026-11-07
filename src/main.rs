@@ -12,7 +12,22 @@ async fn main() -> Result<()> {
         Some(Commands::Acp) => {
             return tinycode::acp::run_acp().await;
         }
+        Some(Commands::AcpClient(args)) => {
+            let server_cmd = match args.server {
+                Some(p) => p,
+                None => std::env::current_exe().into_diagnostic()?,
+            };
+            let cfg = tinycode::acp_client::AcpClientConfig {
+                server_cmd,
+                server_args: vec!["acp".to_string()],
+                cwd: args.cwd,
+                prompt: args.prompt,
+                handshake_only: args.handshake_only,
+            };
+            return tinycode::acp_client::run_acp_client(cfg).await;
+        }
         Some(Commands::Usage(args)) => {
+            let _ = args;
             let code = usage::cli(&[]); // usage might need adjustment
             std::process::exit(code);
         }

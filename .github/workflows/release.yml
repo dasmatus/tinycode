@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  # Same UTC schedule cadence as LosOS channel automation (00:17 UTC daily).
+  schedule:
+    - cron: "17 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish binary
+    # Publish from main only.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Package binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/tinycode dist/tinycode-x86_64-unknown-linux-gnu
+          chmod +x dist/tinycode-x86_64-unknown-linux-gnu
+          (cd dist && sha256sum tinycode-x86_64-unknown-linux-gnu > tinycode-x86_64-unknown-linux-gnu.sha256)
+          ls -lh dist
+          sha256sum dist/*
+
+      - name: Publish GitHub pre-release (nightly, from main)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="nightly"
+          TITLE="Nightly build (main)"
+          SHA="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NOTES="Automated nightly build from \`main\` @ \`${SHA}\` (${DATE})."$'\n\n'"Assets: \`tinycode-x86_64-unknown-linux-gnu\` (+ .sha256)."
+
+          # Move the rolling nightly tag to current main.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$TAG"
+          git push -f origin "refs/tags/$TAG"
+
+          # Create or update the pre-release and upload assets.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --title "$TITLE" --notes "$NOTES" --target main
+          else
+            gh release create "$TAG" --prerelease --title "$TITLE" --notes "$NOTES" --target main
+          fi
+          gh release upload "$TAG" dist/* --clobber

@@ -6,3 +6,4 @@ pub mod tools;
 pub mod usage;
 pub mod cli;
 pub mod acp;
+pub mod acp_client;
