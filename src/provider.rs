@@ -86,6 +86,7 @@ fn build_body(
             msgs.extend(messages.iter().cloned());
             let mut body = json!({
                 "model": model,
+                "max_tokens": MAX_TOKENS,
                 "stream": true,
                 "stream_options": {"include_usage": true},
                 "messages": msgs,
