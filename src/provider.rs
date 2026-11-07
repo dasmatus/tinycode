@@ -179,10 +179,14 @@ pub fn stream(
 
 /// OpenCode-hosted inference gateways route requests per session. Tagging
 /// with `x-opencode-session` preserves session affinity/routing parity with
-/// OpenCode's API behavior.
+/// OpenCode's API behavior. Matches the canonical `/inference/...` endpoints
+/// and the `/zen/...` gateway paths (both enforce the session header).
 pub fn is_opencode_gateway(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    lower.contains("opencode.ai/") && lower.contains("/inference/")
+    if !lower.contains("opencode.ai/") {
+        return false;
+    }
+    lower.contains("/inference/") || lower.contains("/zen/")
 }
 
 fn stream_anthropic(
@@ -489,7 +493,18 @@ mod tests {
         assert!(is_opencode_gateway(
             "https://OPENCODE.AI/inference/custom/openai/v1/chat/completions"
         ));
+        assert!(is_opencode_gateway(
+            "https://opencode.ai/inference/go/anthropic/v1/messages"
+        ));
+        // Zen gateway paths (e.g. TINYCODE_BASE_URL=https://opencode.ai/zen/go)
+        // also require x-opencode-session.
+        assert!(is_opencode_gateway("https://opencode.ai/zen/go/v1/messages"));
+        assert!(is_opencode_gateway(
+            "https://opencode.ai/zen/go/chat/completions"
+        ));
+        assert!(is_opencode_gateway("https://OPENCODE.AI/zen/v1/messages"));
         assert!(!is_opencode_gateway("https://api.openai.com/v1/chat/completions"));
         assert!(!is_opencode_gateway("https://opencode.ai/docs/api"));
+        assert!(!is_opencode_gateway("https://opencode.ai/console"));
     }
 }
