@@ -1,219 +1,288 @@
-use crate::agent::Agent;
 use crate::config::{self, Config};
-use miette::Result;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use agent_client_protocol::{
+    Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
+    CancelNotification, Client, ContentBlock, Error, ExtNotification, ExtRequest, ExtResponse,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities,
+    NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
+    SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse,
+    StopReason, TextContent, V1,
+};
+use miette::{miette, Result};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Arc;
+use tokio::task::LocalSet;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
-    params: Option<Value>,
+struct SessionState {
+    agent: crate::agent::Agent,
+    _config: Config,
 }
 
-#[derive(Serialize, Debug)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
+#[derive(Clone)]
+struct TinyAcpAgent {
+    inner: Rc<Inner>,
 }
 
-#[derive(Serialize, Debug)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
+struct Inner {
+    sessions: RefCell<HashMap<Arc<str>, SessionState>>,
+    conn: RefCell<Option<Rc<AgentSideConnection>>>,
 }
 
-struct AcpServer {
-    sessions: Arc<Mutex<HashMap<String, (Agent, Config)>>>,
-}
-
-impl AcpServer {
+impl TinyAcpAgent {
     fn new() -> Self {
         Self {
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            inner: Rc::new(Inner {
+                sessions: RefCell::new(HashMap::new()),
+                conn: RefCell::new(None),
+            }),
         }
     }
 
-    fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = req.id.clone()?;
-        let result = match req.method.as_str() {
-            "initialize" => self.initialize(req.params),
-            "session/new" => self.session_new(req.params),
-            "session/prompt" => self.session_prompt(req.params),
-            "session/cancel" => {
-                // notification style but might come as request
-                return Some(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id,
-                    result: Some(json!({})),
-                    error: None,
-                });
-            }
-            _ => Err(JsonRpcError {
-                code: -32601,
-                message: "Method not found".to_string(),
-                data: None,
-            }),
-        };
-
-        Some(match result {
-            Ok(r) => JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: Some(r),
-                error: None,
-            },
-            Err(e) => JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: None,
-                error: Some(e),
-            },
-        })
+    fn set_conn(&self, conn: Rc<AgentSideConnection>) {
+        *self.inner.conn.borrow_mut() = Some(conn);
     }
 
-    fn initialize(&self, _params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
-        Ok(json!({
-            "protocolVersion": 1,
-            "agentCapabilities": {
-                "loadSession": false,
-                "promptCapabilities": {
-                    "image": false,
-                    "audio": false,
-                    "embeddedContext": false
-                }
-            },
-            "agentInfo": {
-                "name": "tinycode",
-                "title": "TinyCode",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }))
+    fn conn(&self) -> std::result::Result<Rc<AgentSideConnection>, Error> {
+        self.inner
+            .conn
+            .borrow()
+            .clone()
+            .ok_or_else(|| Error::internal_error().with_data("connection not ready"))
     }
 
-    fn session_new(&self, params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
-        let params = params.unwrap_or(json!({}));
-        let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
-
-        let cfg = build_config_from_env(cwd.clone()).map_err(|e| JsonRpcError {
-            code: -32603,
-            message: format!("Internal error: {}", e),
-            data: None,
-        })?;
-
-        let agent = Agent::new(cfg.clone()).map_err(|e| JsonRpcError {
-            code: -32603,
-            message: format!("Internal error: {}", e),
-            data: None,
-        })?;
-
-        let session_id = agent
+    fn make_session_id(agent: &crate::agent::Agent) -> SessionId {
+        let name = agent
             .session_path()
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("session")
             .to_string();
+        SessionId(Arc::from(name))
+    }
+}
 
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), (agent, cfg));
-
-        Ok(json!({
-            "sessionId": session_id
-        }))
+#[async_trait::async_trait(?Send)]
+impl Agent for TinyAcpAgent {
+    async fn initialize(
+        &self,
+        _args: InitializeRequest,
+    ) -> std::result::Result<InitializeResponse, Error> {
+        Ok(InitializeResponse {
+            protocol_version: V1,
+            agent_capabilities: AgentCapabilities {
+                load_session: false,
+                prompt_capabilities: PromptCapabilities {
+                    image: false,
+                    audio: false,
+                    embedded_context: false,
+                    meta: None,
+                },
+                mcp_capabilities: McpCapabilities {
+                    http: false,
+                    sse: false,
+                    meta: None,
+                },
+                meta: None,
+            },
+            auth_methods: Vec::new(),
+            meta: None,
+        })
     }
 
-    fn session_prompt(&self, params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
-        let params = params.ok_or_else(|| JsonRpcError {
-            code: -32602,
-            message: "Invalid params".to_string(),
-            data: None,
-        })?;
-        let session_id = params
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| JsonRpcError {
-                code: -32602,
-                message: "Missing sessionId".to_string(),
-                data: None,
-            })?
-            .to_string();
+    async fn authenticate(
+        &self,
+        _args: AuthenticateRequest,
+    ) -> std::result::Result<AuthenticateResponse, Error> {
+        Ok(AuthenticateResponse::default())
+    }
 
-        // Extract prompt text
-        let mut task = String::new();
-        if let Some(prompt) = params.get("prompt") {
-            if let Some(arr) = prompt.as_array() {
-                for block in arr {
-                    if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                        task.push_str(text);
-                        task.push('\n');
-                    } else if block.get("type").and_then(|v| v.as_str()) == Some("text") {
-                        if let Some(content) = block.get("content").and_then(|v| v.as_str()) {
-                            task.push_str(content);
-                            task.push('\n');
-                        } else if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                            task.push_str(text);
-                            task.push('\n');
+    async fn new_session(
+        &self,
+        args: NewSessionRequest,
+    ) -> std::result::Result<NewSessionResponse, Error> {
+        let cwd = if args.cwd.as_os_str().is_empty() {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        } else {
+            args.cwd
+        };
+        let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+        let cfg = build_config_from_env(cwd).map_err(|e| {
+            Error::internal_error().with_data(format!("failed to build config: {e}"))
+        })?;
+        let agent = crate::agent::Agent::new(cfg.clone()).map_err(|e| {
+            Error::internal_error().with_data(format!("failed to create agent: {e}"))
+        })?;
+        let session_id = Self::make_session_id(&agent);
+        self.inner.sessions.borrow_mut().insert(
+            session_id.0.clone(),
+            SessionState {
+                agent,
+                _config: cfg,
+            },
+        );
+        Ok(NewSessionResponse {
+            session_id,
+            modes: None,
+            meta: None,
+        })
+    }
+
+    async fn prompt(
+        &self,
+        args: PromptRequest,
+    ) -> std::result::Result<PromptResponse, Error> {
+        let session_id = args.session_id.0.clone();
+        let task = prompt_to_text(&args.prompt);
+        if task.trim().is_empty() {
+            return Ok(PromptResponse {
+                stop_reason: StopReason::EndTurn,
+                meta: None,
+            });
+        }
+
+        let conn = self.conn()?;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEventMsg>();
+
+        // Move the session agent out for blocking execution, then put it back.
+        let mut state = {
+            let mut sessions = self.inner.sessions.borrow_mut();
+            sessions
+                .remove(&session_id)
+                .ok_or_else(|| Error::invalid_params().with_data("session not found"))?
+        };
+
+        let handle = tokio::task::spawn_blocking(move || {
+            state.agent.messages.push(serde_json::json!({"role": "user", "content": task}));
+            let mut stop_reason = StopReason::EndTurn;
+            let code = state
+                .agent
+                .run(&mut |event: &crate::agent::Event| {
+                    match event {
+                        crate::agent::Event::Assistant(text) => {
+                            let _ = tx.send(AgentEventMsg::Text(text.clone()));
                         }
+                        crate::agent::Event::Done { text, .. } => {
+                            let _ = tx.send(AgentEventMsg::DoneText(text.clone()));
+                        }
+                        crate::agent::Event::MaxTurns { .. } => {
+                            stop_reason = StopReason::MaxTurnRequests;
+                        }
+                        crate::agent::Event::Error(msg) => {
+                            let _ = tx.send(AgentEventMsg::Error(msg.clone()));
+                        }
+                        _ => {}
                     }
+                });
+            match code {
+                Ok(2) => stop_reason = StopReason::MaxTurnRequests,
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = tx.send(AgentEventMsg::Error(e.to_string()));
+                    stop_reason = StopReason::EndTurn;
                 }
-            } else if let Some(s) = prompt.as_str() {
-                task.push_str(s);
+            }
+            (state, stop_reason)
+        });
+
+        // Forward streamed text to the client as session updates.
+        let notify_session = SessionId(session_id.clone());
+        while let Some(msg) = rx.recv().await {
+            let text = match msg {
+                AgentEventMsg::Text(t) | AgentEventMsg::DoneText(t) => t,
+                AgentEventMsg::Error(e) => format!("[error] {e}"),
+            };
+            if !text.is_empty() {
+                let _ = conn
+                    .session_notification(SessionNotification {
+                        session_id: notify_session.clone(),
+                        update: SessionUpdate::AgentMessageChunk {
+                            content: ContentBlock::Text(TextContent {
+                                annotations: None,
+                                text,
+                                meta: None,
+                            }),
+                        },
+                        meta: None,
+                    })
+                    .await;
             }
         }
-        let task = task.trim().to_string();
 
-        let mut sessions = self.sessions.lock().unwrap();
-        let (agent, _cfg) = sessions.get_mut(&session_id).ok_or_else(|| JsonRpcError {
-            code: -32602,
-            message: "Session not found".to_string(),
-            data: None,
-        })?;
+        let (state, stop_reason) = handle
+            .await
+            .map_err(|e| Error::internal_error().with_data(format!("agent task failed: {e}")))?;
+        self.inner.sessions.borrow_mut().insert(session_id, state);
 
-        if !task.is_empty() {
-            agent.messages.push(serde_json::json!({"role": "user", "content": task}));
-        }
-
-        let mut final_text = String::new();
-        let _code = agent
-            .run(&mut |event: &crate::agent::Event| {
-                match event {
-                    crate::agent::Event::Assistant(text) => {
-                        final_text.push_str(text);
-                    }
-                    crate::agent::Event::Done { text, .. } => {
-                        final_text = text.clone();
-                    }
-                    _ => {}
-                }
-            })
-            .map_err(|e| JsonRpcError {
-                code: -32603,
-                message: format!("Internal error: {}", e),
-                data: None,
-            })?;
-
-        Ok(json!({
-            "stopReason": "end_turn"
-        }))
+        Ok(PromptResponse {
+            stop_reason,
+            meta: None,
+        })
     }
+
+    async fn cancel(&self, _args: CancelNotification) -> std::result::Result<(), Error> {
+        // Cooperative cancellation is not yet wired into the agent loop.
+        Ok(())
+    }
+
+    async fn load_session(
+        &self,
+        _args: LoadSessionRequest,
+    ) -> std::result::Result<LoadSessionResponse, Error> {
+        Err(Error::method_not_found())
+    }
+
+    async fn set_session_mode(
+        &self,
+        _args: SetSessionModeRequest,
+    ) -> std::result::Result<SetSessionModeResponse, Error> {
+        Err(Error::method_not_found())
+    }
+
+    async fn ext_method(
+        &self,
+        _args: ExtRequest,
+    ) -> std::result::Result<ExtResponse, Error> {
+        Err(Error::method_not_found())
+    }
+
+    async fn ext_notification(
+        &self,
+        _args: ExtNotification,
+    ) -> std::result::Result<(), Error> {
+        Ok(())
+    }
+}
+
+enum AgentEventMsg {
+    Text(String),
+    DoneText(String),
+    Error(String),
+}
+
+fn prompt_to_text(blocks: &[ContentBlock]) -> String {
+    let mut out = String::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Text(t) => {
+                out.push_str(&t.text);
+                out.push('\n');
+            }
+            ContentBlock::ResourceLink(r) => {
+                out.push_str(&format!("[resource: {}]", r.uri));
+                out.push('\n');
+            }
+            ContentBlock::Resource(r) => {
+                // Best-effort: embedded resources may carry text; keep a marker.
+                out.push_str(&format!("[embedded resource: {:?}]", r.resource));
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn std::error::Error>> {
@@ -292,28 +361,27 @@ fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn s
     })
 }
 
+/// Run the ACP (Agent Client Protocol) server over stdio using the
+/// `agent-client-protocol` library.
 pub async fn run_acp() -> Result<()> {
-    let server = AcpServer::new();
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut stdout = io::BufWriter::new(stdout.lock());
+    let agent = TinyAcpAgent::new();
+    let stdin = tokio::io::stdin().compat();
+    let stdout = tokio::io::stdout().compat_write();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(&line) {
-            if let Some(resp) = server.handle_request(req) {
-                let resp_str = serde_json::to_string(&resp).unwrap();
-                let _ = writeln!(stdout, "{}", resp_str);
-                let _ = stdout.flush();
-            }
-            // If it's a notification (no id), we don't respond
-        }
-    }
-    Ok(())
+    let local = LocalSet::new();
+    local
+        .run_until(async move {
+            let (conn, io_task) = AgentSideConnection::new(
+                agent.clone(),
+                stdout,
+                stdin,
+                |fut| {
+                    tokio::task::spawn_local(fut);
+                },
+            );
+            let conn = Rc::new(conn);
+            agent.set_conn(conn);
+            io_task.await.map_err(|e| miette!("ACP I/O error: {e}"))
+        })
+        .await
 }
