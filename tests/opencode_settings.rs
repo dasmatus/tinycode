@@ -103,3 +103,61 @@ fn explicit_flags_override_reused_settings() {
     assert_eq!(cfg.base_url, "http://127.0.0.1:9");
     assert_eq!(cfg.provider_id.as_deref(), Some("opencode-go"), "id labels usage records even when overridden");
 }
+
+#[test]
+fn opencode_api_key_env_is_used_as_fallback() {
+    let dir = tempdir("oc-key");
+    let config_path = dir.0.join("opencode.json");
+    let auth_path = dir.0.join("auth.json");
+    fs::write(&config_path, "{}").expect("write");
+    fs::write(&auth_path, "{}").expect("write");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_tiny = std::env::var("TINYCODE_API_KEY").ok();
+    let prev_oc = std::env::var("OPENCODE_API_KEY").ok();
+    let prev_ant = std::env::var("ANTHROPIC_API_KEY").ok();
+    let prev_oai = std::env::var("OPENAI_API_KEY").ok();
+    std::env::set_var("TINYCODE_OPENCODE_CONFIG", &config_path);
+    std::env::set_var("TINYCODE_OPENCODE_AUTH", &auth_path);
+    std::env::remove_var("TINYCODE_API_KEY");
+    std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("OPENAI_API_KEY");
+    std::env::set_var("OPENCODE_API_KEY", "sk-opencode-test");
+    let cfg = config::parse_args(&["run".to_string(), "demo".to_string()]).expect("config");
+    // Restore
+    std::env::remove_var("TINYCODE_OPENCODE_CONFIG");
+    std::env::remove_var("TINYCODE_OPENCODE_AUTH");
+    match prev_tiny { Some(v) => std::env::set_var("TINYCODE_API_KEY", v), None => std::env::remove_var("TINYCODE_API_KEY") }
+    match prev_oc { Some(v) => std::env::set_var("OPENCODE_API_KEY", v), None => std::env::remove_var("OPENCODE_API_KEY") }
+    match prev_ant { Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v), None => std::env::remove_var("ANTHROPIC_API_KEY") }
+    match prev_oai { Some(v) => std::env::set_var("OPENAI_API_KEY", v), None => std::env::remove_var("OPENAI_API_KEY") }
+    assert_eq!(cfg.api_key, "sk-opencode-test");
+}
+
+#[test]
+fn opencode_provider_settings_base_url_is_respected() {
+    let dir = tempdir("oc-base");
+    let config_path = dir.0.join("opencode.json");
+    let auth_path = dir.0.join("auth.json");
+    // Flexible provider config: settings.baseURL (OpenCode-style).
+    fs::write(
+        &config_path,
+        r#"{"model":"openai/gpt-test","provider":{"openai":{"settings":{"baseURL":"https://proxy.example/v1"},"apiKey":"sk-proxy"}}}"#,
+    )
+    .expect("write");
+    fs::write(&auth_path, "{}").expect("write");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::set_var("TINYCODE_OPENCODE_CONFIG", &config_path);
+    std::env::set_var("TINYCODE_OPENCODE_AUTH", &auth_path);
+    std::env::remove_var("TINYCODE_API_KEY");
+    std::env::remove_var("OPENCODE_API_KEY");
+    std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("OPENAI_API_KEY");
+    std::env::remove_var("TINYCODE_BASE_URL");
+    let cfg = config::parse_args(&["run".to_string(), "demo".to_string()]).expect("config");
+    std::env::remove_var("TINYCODE_OPENCODE_CONFIG");
+    std::env::remove_var("TINYCODE_OPENCODE_AUTH");
+    assert_eq!(cfg.provider, ProviderKind::OpenAi);
+    assert_eq!(cfg.model, "gpt-test");
+    assert_eq!(cfg.api_key, "sk-proxy");
+    assert_eq!(cfg.base_url, "https://proxy.example/v1");
+}

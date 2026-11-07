@@ -19,8 +19,10 @@ pub enum Commands {
     Run(RunArgs),
     /// Summarize recorded provider usage
     Usage(UsageArgs),
-    /// Run as ACP (Agent Client Protocol) server
+    /// Run as ACP (Agent Client Protocol) server over stdio
     Acp,
+    /// Run a simple ACP client to test the ACP server
+    AcpClient(AcpClientArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -72,4 +74,23 @@ pub struct RunArgs {
 pub struct UsageArgs {
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct AcpClientArgs {
+    /// Working directory for the ACP session
+    #[arg(long, default_value = ".")]
+    pub cwd: PathBuf,
+
+    /// Prompt to send after session creation (omit with --handshake-only)
+    #[arg(long)]
+    pub prompt: Option<String>,
+
+    /// Only perform initialize + new_session handshake, then exit
+    #[arg(long)]
+    pub handshake_only: bool,
+
+    /// Path to the tinycode binary to run as the ACP server (defaults to current executable)
+    #[arg(long)]
+    pub server: Option<PathBuf>,
 }

@@ -287,6 +287,14 @@ fn prompt_to_text(blocks: &[ContentBlock]) -> String {
 
 fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn std::error::Error>> {
     let (oc_config_path, oc_auth_path) = config::opencode_paths();
+    let (oc_config_path, oc_auth_path) = (
+        std::env::var("TINYCODE_OPENCODE_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or(oc_config_path),
+        std::env::var("TINYCODE_OPENCODE_AUTH")
+            .map(PathBuf::from)
+            .unwrap_or(oc_auth_path),
+    );
     let oc = config::load_opencode(&oc_config_path, &oc_auth_path);
 
     let provider = if let Ok(p) = std::env::var("TINYCODE_PROVIDER") {
@@ -302,6 +310,7 @@ fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn s
     };
 
     let api_key = std::env::var("TINYCODE_API_KEY")
+        .or_else(|_| std::env::var("OPENCODE_API_KEY"))
         .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
         .or_else(|_| std::env::var("OPENAI_API_KEY"))
         .or_else(|_| {

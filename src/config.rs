@@ -84,6 +84,73 @@ fn id_to_kind(id: &str) -> Option<ProviderKind> {
     })
 }
 
+fn preferred_provider_names(providers: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut names: Vec<String> = providers.keys().cloned().collect();
+    names.sort_by_key(|name| match name.as_str() {
+        "anthropic" | "openai" => 0,
+        "opencode-go" => 1,
+        _ => 2,
+    });
+    // Keep known/interesting names first, but retain others for forward compat.
+    names
+}
+
+fn provider_key(p: &Value) -> Option<String> {
+    for path in [
+        &["apiKey"][..],
+        &["options", "apiKey"][..],
+        &["settings", "apiKey"][..],
+        &["token"][..],
+    ] {
+        let mut cur = p;
+        let mut ok = true;
+        for k in path {
+            match cur.get(*k) {
+                Some(v) => cur = v,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            if let Some(s) = cur.as_str().filter(|s| !s.is_empty()) {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn provider_base(p: &Value) -> Option<String> {
+    for path in [
+        &["baseURL"][..],
+        &["baseUrl"][..],
+        &["options", "baseURL"][..],
+        &["options", "baseUrl"][..],
+        &["settings", "baseURL"][..],
+        &["settings", "baseUrl"][..],
+    ] {
+        let mut cur = p;
+        let mut ok = true;
+        for k in path {
+            match cur.get(*k) {
+                Some(v) => cur = v,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            if let Some(s) = cur.as_str().filter(|s| !s.is_empty()) {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
     let mut env = OpenCodeEnv::default();
 
@@ -113,6 +180,7 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
     }
 
     // opencode.json: {"model": "opencode-go/glm-…", "provider": {"anthropic": {"apiKey": …}}}
+    // Also accept flexible OpenCode config shapes (options/settings baseURL/apiKey).
     if let Ok(text) = std::fs::read_to_string(config_path) {
         if let Ok(cfg) = serde_json::from_str::<Value>(&text) {
             if env.model.is_none() {
@@ -121,22 +189,31 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
                     .and_then(Value::as_str)
                     .and_then(split_opencode_model);
             }
-            if env.api_key.is_none() {
-                if let Some(providers) = cfg.get("provider").and_then(Value::as_object) {
-                    for name in ["anthropic", "openai", "opencode-go"] {
-                        let key = providers
-                            .get(name)
-                            .and_then(|p| p.get("apiKey"))
-                            .and_then(Value::as_str)
-                            .filter(|k| !k.is_empty());
+            if let Some(providers) = cfg.get("provider").and_then(Value::as_object) {
+                let names = preferred_provider_names(providers);
+                for name in names {
+                    let Some(p) = providers.get(&name) else { continue };
+                    let kind = match id_to_kind(&name) {
+                        Some(k) => k,
+                        None => continue,
+                    };
+                    let key = provider_key(p);
+                    let base = provider_base(p)
+                        .or_else(|| provider_base_url(&name).map(|b| b.to_string()));
+
+                    if env.api_key.is_none() {
                         if let Some(key) = key {
-                            if let Some(kind) = id_to_kind(name) {
-                                env.provider = Some(kind);
-                                env.provider_id = Some(name.to_string());
-                                env.base_url = provider_base_url(name).map(|b| b.to_string());
-                                env.api_key = Some(key.to_string());
-                            }
-                            break;
+                            env.provider = Some(kind);
+                            env.provider_id = Some(name.clone());
+                            env.base_url = base.clone();
+                            env.api_key = Some(key);
+                        }
+                    }
+                    // Pick up an endpoint override even when auth came from auth.json.
+                    if env.base_url.is_none() && env.provider == Some(kind) {
+                        if let Some(base) = provider_base(p) {
+                            env.provider_id = Some(name.clone());
+                            env.base_url = Some(base);
                         }
                     }
                 }
@@ -368,7 +445,9 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
 
     let provider_id = oc.provider_id.filter(|_| oc.provider == Some(provider));
     let resolved_base = oc.base_url.filter(|_| oc.provider == Some(provider));
-    let env_key = std::env::var("TINYCODE_API_KEY").ok();
+    let env_key = std::env::var("TINYCODE_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("OPENCODE_API_KEY").ok());
     let key_from_env = match (env_key, provider) {
         (Some(k), _) => Some(k),
         (None, ProviderKind::Anthropic) => std::env::var("ANTHROPIC_API_KEY").ok(),
