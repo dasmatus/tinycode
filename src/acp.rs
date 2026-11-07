@@ -285,7 +285,7 @@ fn prompt_to_text(blocks: &[ContentBlock]) -> String {
     out
 }
 
-fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn std::error::Error>> {
+pub fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn std::error::Error>> {
     let (oc_config_path, oc_auth_path) = config::opencode_paths();
     let (oc_config_path, oc_auth_path) = (
         std::env::var("TINYCODE_OPENCODE_CONFIG")
