@@ -177,9 +177,12 @@ pub fn stream(
     }
 }
 
-/// The OpenCode Go gateway is OpenAI-compatible but routes per session id.
+/// OpenCode-hosted inference gateways route requests per session. Tagging
+/// with `x-opencode-session` preserves session affinity/routing parity with
+/// OpenCode's API behavior.
 pub fn is_opencode_gateway(url: &str) -> bool {
-    url.contains("opencode.ai/inference") && url.contains("/openai/")
+    let lower = url.to_ascii_lowercase();
+    lower.contains("opencode.ai/") && lower.contains("/inference/")
 }
 
 fn stream_anthropic(
@@ -471,5 +474,22 @@ pub fn tool_results_messages(kind: ProviderKind, results: &[ResultMsg]) -> Vec<V
             .iter()
             .map(|r| json!({"role": "tool", "tool_call_id": r.id, "content": r.output}))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_opencode_gateway;
+
+    #[test]
+    fn opencode_gateway_detection_has_parity_for_inference_endpoints() {
+        assert!(is_opencode_gateway(
+            "https://opencode.ai/inference/go/openai/v1/chat/completions"
+        ));
+        assert!(is_opencode_gateway(
+            "https://OPENCODE.AI/inference/custom/openai/v1/chat/completions"
+        ));
+        assert!(!is_opencode_gateway("https://api.openai.com/v1/chat/completions"));
+        assert!(!is_opencode_gateway("https://opencode.ai/docs/api"));
     }
 }
