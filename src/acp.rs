@@ -297,8 +297,15 @@ fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn s
     );
     let oc = config::load_opencode(&oc_config_path, &oc_auth_path);
 
-    let provider = if let Ok(p) = std::env::var("TINYCODE_PROVIDER") {
-        config::ProviderKind::parse(&p).unwrap_or(config::ProviderKind::Anthropic)
+    let explicit_provider = std::env::var("TINYCODE_PROVIDER").ok();
+    let explicit_base_url = std::env::var("TINYCODE_BASE_URL").ok();
+    let raw_model = std::env::var("TINYCODE_MODEL").ok();
+    let model_spec = raw_model.as_deref().and_then(config::resolve_model_spec);
+
+    let provider = if let Some(p) = &explicit_provider {
+        config::ProviderKind::parse(p).unwrap_or(config::ProviderKind::Anthropic)
+    } else if let Some((k, _, _, _)) = &model_spec {
+        *k
     } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         config::ProviderKind::Anthropic
     } else if std::env::var("OPENAI_API_KEY").is_ok() {
@@ -322,30 +329,50 @@ fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn s
         })
         .unwrap_or_default();
 
-    let model = std::env::var("TINYCODE_MODEL")
-        .or_else(|_| {
-            if let Some((k, m)) = &oc.model {
-                if *k == provider {
-                    Ok(m.clone())
-                } else {
-                    Err(std::env::VarError::NotPresent)
+    let model = if let Some((kind, _, _, bare)) = &model_spec {
+        if *kind == provider || explicit_provider.is_none() {
+            bare.clone()
+        } else {
+            raw_model.clone().unwrap_or_default()
+        }
+    } else {
+        raw_model
+            .or_else(|| {
+                oc.model.as_ref().and_then(|(k, m)| {
+                    if *k == provider {
+                        Some(m.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| provider.default_model().to_string())
+    };
+
+    let mut provider_id = if oc.provider == Some(provider) {
+        oc.provider_id.clone()
+    } else {
+        None
+    };
+    let mut base_url = explicit_base_url.or_else(|| {
+        if oc.provider == Some(provider) {
+            oc.base_url.clone()
+        } else {
+            None
+        }
+    });
+    if explicit_provider.is_none() {
+        if let Some((kind, id, spec_base, _)) = &model_spec {
+            if *kind == provider {
+                provider_id = Some(id.clone());
+                if base_url.is_none() {
+                    base_url = spec_base.clone();
                 }
-            } else {
-                Err(std::env::VarError::NotPresent)
             }
-        })
-        .unwrap_or_else(|_| provider.default_model().to_string());
+        }
+    }
 
-    let base_url = std::env::var("TINYCODE_BASE_URL")
-        .or_else(|_| {
-            if oc.provider == Some(provider) {
-                oc.base_url.clone().ok_or(std::env::VarError::NotPresent)
-            } else {
-                Err(std::env::VarError::NotPresent)
-            }
-        })
-        .unwrap_or_else(|_| provider.default_base_url().to_string());
-
+    let base_url = base_url.unwrap_or_else(|| provider.default_base_url().to_string());
     let system_prompt = std::env::var("TINYCODE_SYSTEM_PROMPT").ok().filter(|s| !s.is_empty());
 
     Ok(Config {
@@ -353,11 +380,7 @@ fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn s
         api_key,
         model,
         base_url,
-        provider_id: if oc.provider == Some(provider) {
-            oc.provider_id.clone()
-        } else {
-            None
-        },
+        provider_id,
         usage_file: None,
         root,
         auto: true,
