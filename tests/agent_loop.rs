@@ -5,7 +5,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::ops::Not;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -302,10 +301,7 @@ fn max_turns_limit_stops_runaway_loops() {
     let file = agent.session_path().clone();
     let session: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(file).expect("session file")).expect("session");
-    assert!(!session["messages"]
-        .as_array()
-        .expect("msgs")
-        .is_empty());
+    assert!(!session["messages"].as_array().expect("msgs").is_empty());
 }
 
 /// Usage capture: token counts reported by the provider end up as one
