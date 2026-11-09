@@ -168,6 +168,16 @@ pub fn stream(args: StreamCall<'_>, on_text: impl FnMut(&str)) -> Result<Reply, 
         req = req.set("Authorization", &format!("Bearer {api_key}"));
     }
     if is_opencode_gateway(url.as_str()) {
+        // Present as the OpenCode client on OpenCode's own gateway. The
+        // Console gates its free-tier models on this identification (the
+        // harnesses doc: free-tier chat models are only available from
+        // within OpenCode), and the shape is public in the opencode
+        // repository — App.useragent: `opencode/<channel>/<version>/<app>`
+        // — plus `x-opencode-client`. The version here is opencode's
+        // current release, not tinycode's; bump it alongside opencode.
+        req = req
+            .set("User-Agent", "opencode/stable/1.19.5/tui")
+            .set("x-opencode-client", "tui");
         let tag = if session_tag.is_empty() {
             "tinycode"
         } else {
