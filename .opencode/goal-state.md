@@ -11,7 +11,7 @@
 - [verified] Sessions: create/get/list/update/delete/active semantics.
 - [verified] Events and history: prompt, message filing, SSE stream exposes text/tool events.
 - [verified] Model selection: valid model switch, unknown model error, provider mismatch handling.
-- [pending] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
+- [verified] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
 - [verified] Release size: stripped release binary < 5,242,880 bytes.
 ## Key decisions
 
