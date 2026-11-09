@@ -84,6 +84,7 @@ fn agent_guards_session_provider_mismatch() {
         quiet: true,
         session_file: Some(path),
         system_prompt: None,
+        user_agent: None,
         task: "continue".into(),
     };
     let _ = &mut cfg;

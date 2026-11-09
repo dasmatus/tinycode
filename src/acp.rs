@@ -370,6 +370,9 @@ pub fn build_config_from_env(
     let system_prompt = std::env::var("TINYCODE_SYSTEM_PROMPT")
         .ok()
         .filter(|s| !s.is_empty());
+    let user_agent = std::env::var("TINYCODE_USER_AGENT")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     Ok(Config {
         provider,
@@ -386,6 +389,7 @@ pub fn build_config_from_env(
         session_file: None,
         task: String::new(),
         system_prompt,
+        user_agent,
     })
 }
 

@@ -63,12 +63,46 @@ impl Event {
 const COMPACT_THRESHOLD: usize = 280_000;
 const TOOL_RESULT_KEEP: usize = 400;
 
+/// OpenCode-shaped session affinity (`ses_` + 26 characters: 12 hex time
+/// part, 14 base62 random), as `SessionID.create` mints them in the
+/// opencode repository. Deterministic in the session file's name, so a
+/// resumed run presents the same affinity as the run that created it and
+/// the gateway's prompt cache carries over.
+fn session_affinity(session_path: &PathBuf) -> String {
+    let name = session_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("tinycode");
+    let fnv = |seed: u64| {
+        name.bytes().fold(seed, |acc, b| {
+            acc ^ u64::from(b)
+        } .wrapping_mul(0x100000001b3))
+    };
+    let hex = format!("{:012x}", fnv(0xcbf29ce484222325));
+    let pool: &[char] = &"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        .chars()
+        .collect::<Vec<_>>();
+    let mut s = fnv(0x9e3779b97f4a7c15);
+    let mut random = String::with_capacity(14);
+    for _ in 0..14 {
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        random.push(pool[((s >> 33) as usize) % pool.len()]);
+    }
+    format!("ses_{}{}", &hex[..12], random)
+}
+
 pub struct Agent {
     cfg: Config,
     tool_ctx: ToolCtx,
     system: String,
     pub messages: Vec<Value>,
     session_path: PathBuf,
+    /// Stable per-run session affinity, minted once in OpenCode's shape
+    /// (`ses_…`): OpenCode's gateways route and prompt-cache per session,
+    /// and a resumable run should present the same tag as its first run.
+    affinity: String,
     turns: u32,
 }
 
@@ -92,6 +126,7 @@ impl Agent {
             Vec::new()
         };
         let system = system_prompt(&cfg);
+        let affinity = session_affinity(&session_path);
         Ok(Self {
             tool_ctx: ToolCtx {
                 root: cfg.root.clone(),
@@ -101,6 +136,7 @@ impl Agent {
             system,
             messages,
             session_path,
+            affinity,
             turns: 0,
         })
     }
@@ -109,8 +145,8 @@ impl Agent {
         &self.session_path
     }
 
-    /// Short per-run tag sent to session-routing gateways and kept in usage
-    /// records: the session file's file name (unique per run, no paths).
+    /// Short per-run tag kept in usage records: the session file's file
+    /// name (unique per run, no paths).
     fn session_tag(&self) -> String {
         self.session_path
             .file_name()
@@ -184,8 +220,9 @@ impl Agent {
                     system: &self.system,
                     tools: &tools_spec,
                     messages: &self.messages,
-                    session_tag: &self.session_tag(),
+                    session_tag: &self.affinity,
                     temperature: None,
+                    user_agent: self.cfg.user_agent.as_deref(),
                 },
                 |_delta: &str| {},
             ) {

@@ -303,6 +303,10 @@ pub struct Config {
     /// substituted with the workspace root. When None the default prompt
     /// is used. Set via `--system-prompt-file` or `TINYCODE_SYSTEM_PROMPT`.
     pub system_prompt: Option<String>,
+    /// User-Agent sent on provider requests, overriding the defaults
+    /// (OpenCode's identification on its gateways, ureq's elsewhere).
+    /// Set via `--user-agent` or `TINYCODE_USER_AGENT`.
+    pub user_agent: Option<String>,
 }
 
 pub const USAGE: &str = "\
@@ -325,6 +329,10 @@ OPTIONS:
         --system-prompt-file <PATH>
                              replace the built-in system prompt with the
                              contents of this file ({root} is substituted)
+        --user-agent <UA>    User-Agent for provider requests (default:
+                             TINYCODE_USER_AGENT, else OpenCode's client
+                             identification on its own gateways and ureq's
+                             default elsewhere)
         --json               NDJSON events on stdout instead of human output
         --quiet              suppress stderr narration
 
@@ -332,6 +340,7 @@ ENV:
     TINYCODE_API_KEY   |  ANTHROPIC_API_KEY  |  OPENAI_API_KEY
     TINYCODE_MODEL, TINYCODE_PROVIDER, TINYCODE_BASE_URL
     TINYCODE_SYSTEM_PROMPT   full system prompt text (overrides file flag)
+    TINYCODE_USER_AGENT   User-Agent for provider requests (overrides --user-agent)
 
 OPCODE-STYLE CONFIG (defaults existing per provider are picked up automatically):
     ~/.local/share/opencode/auth.json     — API keys (incl. the opencode-go entry)
@@ -363,6 +372,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
     let mut session_file: Option<PathBuf> = None;
     let mut task_file: Option<PathBuf> = None;
     let mut system_prompt_file: Option<PathBuf> = None;
+    let mut user_agent: Option<String> = None;
     let mut task: Option<String> = None;
 
     let mut i = 0;
@@ -377,6 +387,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             | "--provider"
             | "--root"
             | "--max-turns"
+            | "--user-agent"
             | "-f"
             | "--task-file"
             | "--system-prompt-file" => {
@@ -392,6 +403,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
                             format!("unknown provider '{value}' (anthropic|openai)")
                         })?)
                     }
+                    "--user-agent" => user_agent = Some(value.clone()),
                     "--root" => root = Some(PathBuf::from(value)),
                     "--max-turns" => {
                         max_turns = value
@@ -452,6 +464,11 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             .ok()
             .filter(|s| !s.is_empty())
     };
+
+    // User-Agent override: flag > TINYCODE_USER_AGENT > None (defaults).
+    let user_agent = user_agent
+        .or_else(|| std::env::var("TINYCODE_USER_AGENT").ok())
+        .filter(|ua| !ua.is_empty());
 
     let explicit_provider = provider.is_some();
     let explicit_base_url = base_url.is_some();
@@ -560,6 +577,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         session_file,
         task,
         system_prompt,
+        user_agent,
     })
 }
 
