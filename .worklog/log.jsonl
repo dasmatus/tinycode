@@ -14,3 +14,9 @@
 {"t":"2026-11-09T11:05:23+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo build --release","result":"4293792 bytes under 5242880","status":"ok"}
 {"t":"2026-11-09T11:05:23+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo clippy --all-targets --all-features -- -D warnings","result":"0 errors","status":"ok"}
 {"t":"2026-11-09T11:05:23+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo fmt -- --check","result":"0 diffs","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"implement session_create/get/list/delete/update and model_list/provider_list/agent_list","result":"client-driven OpenCode 2 endpoints and shape tests","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"implement prompt/message list and session history","result":"tests session_history, prompt_events, model_switch","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo test --quiet","result":"all tests pass","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo clippy --all-targets --all-features -- -D warnings","result":"0 errors","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo fmt -- --check","result":"0 diffs","status":"ok"}
+{"t":"2026-11-09T12:02:01+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo build --release","result":"4293792 bytes under 5242880","status":"ok"}

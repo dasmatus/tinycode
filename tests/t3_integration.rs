@@ -195,3 +195,17 @@ fn resolve_model_spec_handles_known_provider_ids() {
     assert!(config::resolve_model_spec("unknown-provider/model").is_none());
     assert!(config::resolve_model_spec("not-qualified").is_none());
 }
+
+#[test]
+fn release_size_limit() {
+    let path = "target/release/tinycode";
+    if !std::path::Path::new(path).exists() {
+        eprintln!("skipping: release binary not built");
+        return;
+    }
+    let size = std::fs::metadata(path).expect("stat").len();
+    assert!(
+        size <= 5242880,
+        "release binary must stay under 5 MB: {size}"
+    );
+}

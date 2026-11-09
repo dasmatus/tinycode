@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+#[derive(Clone, Debug)]
 pub struct Session {
     pub id: String,
     pub agent: String,

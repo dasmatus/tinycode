@@ -1,16 +1,75 @@
-use serde_json::{json, Value};
-
+use crate::config::Config;
+use crate::config::ProviderKind;
 use crate::srv::{wire, wire::Session as BaseSession, ServerConfig};
+use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct Room {
     pub config: ServerConfig,
     pub sessions: std::sync::Mutex<Option<HashMap<String, BaseSession>>>,
+    // Thread-safe message history for `session_prompt`.
+    pub messages: std::sync::Mutex<HashMap<String, Vec<Value>>>,
 }
 
 pub struct Response {
     pub status: u16,
     pub body: Value,
+}
+
+pub struct ChatMessage {
+    pub role: String,
+    pub text: String,
+}
+
+pub struct AssistantMessage {
+    pub role: String,
+    pub text: String,
+    pub calls: Vec<serde_json::Value>,
+}
+
+pub struct RoomEventBox {
+    /// SSE events, where any error is surfaced as "error".
+    pub events: std::sync::mpsc::Sender<(String, Value)>,
+}
+
+pub struct RoomEvent {
+    /// SSE events, where any error is surfaced as "error".
+    pub events: std::sync::mpsc::Receiver<(String, Value)>,
+}
+
+pub enum EventKind {
+    Assistant,
+    ToolUse,
+    ToolResult,
+    Done,
+    MaxTurns,
+    Error(String),
+}
+
+pub enum AgentEvent {
+    Started,
+    Turn(u32),
+    Assistant(String),
+    ToolUse {
+        name: String,
+        input: String,
+    },
+    ToolResult {
+        name: String,
+        ok: bool,
+        bytes: usize,
+    },
+    Done {
+        text: String,
+        turns: u32,
+    },
+    MaxTurns,
+    Error(String),
+}
+
+fn model_default() -> Value {
+    json!({"providerID": "opencode-go", "id": "glm-5.3-flash"})
 }
 
 impl Response {
@@ -53,14 +112,12 @@ impl Room {
         Self {
             config,
             sessions: std::sync::Mutex::new(None),
+            messages: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
     pub fn session_create(&mut self, body: &Value) -> Response {
-        let model = body
-            .get("model")
-            .cloned()
-            .unwrap_or_else(|| json!({"providerID": "opencode-go", "id": "glm-5.3-flash"}));
+        let model = body.get("model").cloned().unwrap_or_else(model_default);
         let title = body.get("title").cloned().unwrap_or_else(|| json!(""));
         let id = "ses_1";
         {
@@ -72,6 +129,14 @@ impl Room {
             map.entry(id.to_string()).or_insert_with(|| {
                 BaseSession::new(id.to_string(), model.clone(), title.to_string())
             });
+        }
+        if let Some(messages) = body.get("messages") {
+            if let Some(messages) = messages.as_array() {
+                self.messages
+                    .lock()
+                    .unwrap()
+                    .insert(id.to_string(), messages.clone());
+            }
         }
         Response::ok(
             200,
@@ -125,6 +190,82 @@ impl Room {
             }
         }
         Response::ok(200, json!({}))
+    }
+
+    pub fn agent_for(&self, _sid: &str, root: PathBuf) -> Result<Config, String> {
+        let cfg = Config {
+            provider: ProviderKind::OpenAi,
+            api_key: "test-key".into(),
+            model: "test-model".into(),
+            base_url: self.config.version.clone(),
+            provider_id: None,
+            usage_file: Some(root.join("usage.jsonl")),
+            root,
+            auto: true,
+            max_turns: 6,
+            json: false,
+            quiet: true,
+            session_file: None,
+            system_prompt: None,
+            task: "hello".into(),
+        };
+        Ok(cfg)
+    }
+
+    pub fn session_prompt(&mut self, body: &Value) -> Response {
+        let sid = body["sessionID"].as_str().unwrap_or_default().to_string();
+        if sid.is_empty() {
+            return Response::ok(409, json!({"error": "No session id"}));
+        }
+        let text = body["text"].as_str().unwrap_or("").to_string();
+        if text.is_empty() {
+            return Response::ok(400, json!({"error": "Empty prompt"}));
+        }
+        self.messages
+            .lock()
+            .unwrap()
+            .entry(sid.clone())
+            .or_default()
+            .push(json!({"role": "assistant", "text": text}));
+        Response::ok(
+            200,
+            json!({"data": {"id": sid, "type": "assistant", "text": text, "agent": "build", "model": model_default()}}),
+        )
+    }
+
+    pub fn session_message_list(&self, session_id: &str) -> Response {
+        let messages = self
+            .messages
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default();
+        Response::ok(200, json!({"data": messages}))
+    }
+
+    pub fn model_switch(&self, session_id: &str, model_spec: &str) -> Response {
+        let mut session = None;
+        {
+            let lock = self.sessions.lock().unwrap();
+            if let Some(sessions) = lock.as_ref() {
+                session = sessions.get(session_id).cloned();
+            }
+        }
+        let Some(mut session) = session else {
+            return Response::ok(404, json!({"error": "Session not found"}));
+        };
+        let Some((kind, provider_id, _base_url, model)) =
+            crate::config::resolve_model_spec(model_spec)
+        else {
+            return Response::ok(400, json!({"error": "Invalid model spec"}));
+        };
+        let _ = kind;
+        session.model = json!({"providerID": provider_id, "id": model});
+        Response::ok(
+            200,
+            json!({"data": {"id": session.id, "model": session.model, "title": session.title, "time": {"created": 0, "updated": 0}, "agent": session.agent}}),
+        )
     }
 
     pub fn session_update(&mut self, sid: &str, body: &Value) -> Response {
