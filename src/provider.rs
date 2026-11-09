@@ -11,8 +11,9 @@ const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// OpenCode's client identification for its own gateways: the Console
 /// gates free-tier chat models on it. Shape per opencode's App.useragent;
-/// the version is opencode's current release, bumped alongside it.
-pub const OPENCODE_USER_AGENT: &str = "opencode/stable/1.19.5/tui";
+/// the version is opencode's current release (packages/opencode/package.json
+/// in the opencode repository), bumped alongside it.
+pub const OPENCODE_USER_AGENT: &str = "opencode/stable/2.2.5/tui";
 
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
@@ -197,7 +198,9 @@ pub fn stream(args: StreamCall<'_>, on_text: impl FnMut(&str)) -> Result<Reply, 
         } else {
             session_tag
         };
-        req = req.set("x-opencode-session", tag);
+        req = req
+            .set("x-opencode-session", tag)
+            .set("x-opencode-session-id", tag);
     }
     let body = build_body(kind, model, system, tools, messages, temperature);
     let resp = match req.send_json(&body) {
