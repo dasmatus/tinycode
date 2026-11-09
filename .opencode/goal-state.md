@@ -7,7 +7,7 @@
 ## Milestones
 
 - [verified] CLI: no manual fallback; `run` and `serve` both clap-driven; remaining tests unaffected.
-- [verified] Server: listening line, server info, `/api/model`, `/api/provider`, `/api/agent`, skills/commands, and auth are catalog-shaped.
+- [verified] Server: listening line, server info, `/api/model`, `/api/provider`, `/api/agent`, skills/commands, and session routes are catalog-shaped.
 - [verified] Sessions: create/get/list/update/delete/active semantics.
 - [verified] Events and history: prompt, message filing, SSE stream exposes text/tool events.
 - [verified] Model selection: valid model switch, unknown model error, provider mismatch handling.
