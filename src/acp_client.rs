@@ -5,8 +5,8 @@ use agent_client_protocol::{
     ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionNotification, SessionUpdate, TerminalOutputRequest, TerminalOutputResponse, TextContent,
-    V1, WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
-    WriteTextFileResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse, V1,
 };
 use miette::{miette, IntoDiagnostic, Result};
 use std::path::PathBuf;
@@ -112,10 +112,7 @@ impl Client for TestClient {
         Err(Error::method_not_found())
     }
 
-    async fn ext_method(
-        &self,
-        _args: ExtRequest,
-    ) -> std::result::Result<ExtResponse, Error> {
+    async fn ext_method(&self, _args: ExtRequest) -> std::result::Result<ExtResponse, Error> {
         Err(Error::method_not_found())
     }
 

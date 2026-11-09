@@ -2,10 +2,10 @@ use crate::config::{self, Config};
 use agent_client_protocol::{
     Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
     CancelNotification, Client, ContentBlock, Error, ExtNotification, ExtRequest, ExtResponse,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities,
-    NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
-    SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse,
-    StopReason, TextContent, V1,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    McpCapabilities, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest,
+    PromptResponse, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, V1,
 };
 use miette::{miette, Result};
 use std::cell::RefCell;
@@ -130,10 +130,7 @@ impl Agent for TinyAcpAgent {
         })
     }
 
-    async fn prompt(
-        &self,
-        args: PromptRequest,
-    ) -> std::result::Result<PromptResponse, Error> {
+    async fn prompt(&self, args: PromptRequest) -> std::result::Result<PromptResponse, Error> {
         let session_id = args.session_id.0.clone();
         let task = prompt_to_text(&args.prompt);
         if task.trim().is_empty() {
@@ -155,26 +152,27 @@ impl Agent for TinyAcpAgent {
         };
 
         let handle = tokio::task::spawn_blocking(move || {
-            state.agent.messages.push(serde_json::json!({"role": "user", "content": task}));
+            state
+                .agent
+                .messages
+                .push(serde_json::json!({"role": "user", "content": task}));
             let mut stop_reason = StopReason::EndTurn;
             let code = state
                 .agent
-                .run(&mut |event: &crate::agent::Event| {
-                    match event {
-                        crate::agent::Event::Assistant(text) => {
-                            let _ = tx.send(AgentEventMsg::Text(text.clone()));
-                        }
-                        crate::agent::Event::Done { text, .. } => {
-                            let _ = tx.send(AgentEventMsg::DoneText(text.clone()));
-                        }
-                        crate::agent::Event::MaxTurns { .. } => {
-                            stop_reason = StopReason::MaxTurnRequests;
-                        }
-                        crate::agent::Event::Error(msg) => {
-                            let _ = tx.send(AgentEventMsg::Error(msg.clone()));
-                        }
-                        _ => {}
+                .run(&mut |event: &crate::agent::Event| match event {
+                    crate::agent::Event::Assistant(text) => {
+                        let _ = tx.send(AgentEventMsg::Text(text.clone()));
                     }
+                    crate::agent::Event::Done { text, .. } => {
+                        let _ = tx.send(AgentEventMsg::DoneText(text.clone()));
+                    }
+                    crate::agent::Event::MaxTurns { .. } => {
+                        stop_reason = StopReason::MaxTurnRequests;
+                    }
+                    crate::agent::Event::Error(msg) => {
+                        let _ = tx.send(AgentEventMsg::Error(msg.clone()));
+                    }
+                    _ => {}
                 });
             match code {
                 Ok(2) => stop_reason = StopReason::MaxTurnRequests,
@@ -241,17 +239,11 @@ impl Agent for TinyAcpAgent {
         Err(Error::method_not_found())
     }
 
-    async fn ext_method(
-        &self,
-        _args: ExtRequest,
-    ) -> std::result::Result<ExtResponse, Error> {
+    async fn ext_method(&self, _args: ExtRequest) -> std::result::Result<ExtResponse, Error> {
         Err(Error::method_not_found())
     }
 
-    async fn ext_notification(
-        &self,
-        _args: ExtNotification,
-    ) -> std::result::Result<(), Error> {
+    async fn ext_notification(&self, _args: ExtNotification) -> std::result::Result<(), Error> {
         Ok(())
     }
 }
@@ -285,7 +277,9 @@ fn prompt_to_text(blocks: &[ContentBlock]) -> String {
     out
 }
 
-pub fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<dyn std::error::Error>> {
+pub fn build_config_from_env(
+    root: PathBuf,
+) -> std::result::Result<Config, Box<dyn std::error::Error>> {
     let (oc_config_path, oc_auth_path) = config::opencode_paths();
     let (oc_config_path, oc_auth_path) = (
         std::env::var("TINYCODE_OPENCODE_CONFIG")
@@ -373,7 +367,9 @@ pub fn build_config_from_env(root: PathBuf) -> std::result::Result<Config, Box<d
     }
 
     let base_url = base_url.unwrap_or_else(|| provider.default_base_url().to_string());
-    let system_prompt = std::env::var("TINYCODE_SYSTEM_PROMPT").ok().filter(|s| !s.is_empty());
+    let system_prompt = std::env::var("TINYCODE_SYSTEM_PROMPT")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     Ok(Config {
         provider,
@@ -403,14 +399,9 @@ pub async fn run_acp() -> Result<()> {
     let local = LocalSet::new();
     local
         .run_until(async move {
-            let (conn, io_task) = AgentSideConnection::new(
-                agent.clone(),
-                stdout,
-                stdin,
-                |fut| {
-                    tokio::task::spawn_local(fut);
-                },
-            );
+            let (conn, io_task) = AgentSideConnection::new(agent.clone(), stdout, stdin, |fut| {
+                tokio::task::spawn_local(fut);
+            });
             let conn = Rc::new(conn);
             agent.set_conn(conn);
             io_task.await.map_err(|e| miette!("ACP I/O error: {e}"))

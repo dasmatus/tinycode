@@ -9,7 +9,7 @@ const MAX_TOKENS: u32 = 16384;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ToolSpec {
     pub name: &'static str,
     pub description: &'static str,
@@ -119,24 +119,39 @@ fn build_body(
     body
 }
 
+/// All the small HTTP restart pieces, grouped so the streaming call does not
+/// become a positional argument soup.
+#[derive(Debug, Clone)]
+pub struct StreamCall<'a> {
+    pub kind: ProviderKind,
+    pub api_key: &'a str,
+    pub model: &'a str,
+    pub base_url: &'a str,
+    pub system: &'a str,
+    pub tools: &'a [ToolSpec],
+    pub messages: &'a [Value],
+    pub session_tag: &'a str,
+    pub temperature: Option<f32>,
+}
+
 /// Stream one assistant turn. Tool-call argument chunks are reassembled
 /// incrementally; system memory stays proportional to the response, not to
 /// any fixed buffer. `session_tag` tags the run on the wire — OpenCode's Go
 /// gateway routes requests per session via `x-opencode-session`.
 /// `temperature` goes on the wire only when set; `None` keeps the
 /// provider's default.
-pub fn stream(
-    kind: ProviderKind,
-    api_key: &str,
-    model: &str,
-    base_url: &str,
-    system: &str,
-    tools: &[ToolSpec],
-    messages: &[Value],
-    session_tag: &str,
-    temperature: Option<f32>,
-    on_text: impl FnMut(&str),
-) -> Result<Reply, Box<dyn Error>> {
+pub fn stream(args: StreamCall<'_>, on_text: impl FnMut(&str)) -> Result<Reply, Box<dyn Error>> {
+    let StreamCall {
+        kind,
+        api_key,
+        model,
+        base_url,
+        system,
+        tools,
+        messages,
+        session_tag,
+        temperature,
+    } = args;
     let url = chat_url(kind, base_url);
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(CONNECT_TIMEOUT)
@@ -153,7 +168,11 @@ pub fn stream(
         req = req.set("Authorization", &format!("Bearer {api_key}"));
     }
     if is_opencode_gateway(url.as_str()) {
-        let tag = if session_tag.is_empty() { "tinycode" } else { session_tag };
+        let tag = if session_tag.is_empty() {
+            "tinycode"
+        } else {
+            session_tag
+        };
         req = req.set("x-opencode-session", tag);
     }
     let body = build_body(kind, model, system, tools, messages, temperature);
@@ -161,10 +180,7 @@ pub fn stream(
         Ok(r) => r,
         Err(ureq::Error::Status(status, resp)) => {
             let mut detail = String::new();
-            let _ = resp
-                .into_reader()
-                .take(8192)
-                .read_to_string(&mut detail);
+            let _ = resp.into_reader().take(8192).read_to_string(&mut detail);
             return Err(format!("HTTP {status} from {url}: {detail}").into());
         }
         Err(e) => return Err(e.into()),
@@ -209,7 +225,7 @@ fn stream_anthropic(
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        let data = line.trim_end_matches(|c| c == '\n' || c == '\r');
+        let data = line.trim_end_matches(['\n', '\r']);
         let Some(data) = data.strip_prefix("data:") else {
             continue;
         };
@@ -221,7 +237,10 @@ fn stream_anthropic(
         Usage::from_anthropic_event(&event, &mut anthropic);
         // Error payloads ({"type":"error","error":{…}}, or bare {"error":…}).
         if let Some(err) = event.get("error").filter(|e| e.is_object()) {
-            let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+            let msg = err
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
             return Err(format!("provider error: {msg}").into());
         }
         match event.get("type").and_then(Value::as_str) {
@@ -321,7 +340,7 @@ fn stream_openai(
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        let data = line.trim_end_matches(|c| c == '\n' || c == '\r');
+        let data = line.trim_end_matches(['\n', '\r']);
         let Some(data) = data.strip_prefix("data:") else {
             continue;
         };
@@ -335,7 +354,10 @@ fn stream_openai(
         let event: Value = serde_json::from_str(data)?;
         // Bare error payloads like {"error":{"message":…}}.
         if let Some(err) = event.get("error").filter(|e| e.is_object()) {
-            let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+            let msg = err
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
             return Err(format!("provider error: {msg}").into());
         }
         let new_usage = Usage::from_openai_chunk(&event);
@@ -368,7 +390,14 @@ fn stream_openai(
             {
                 let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 if !calls.iter().any(|(i, _)| *i == index) {
-                    calls.push((index, Call { id: String::new(), name: String::new(), args: String::new() }));
+                    calls.push((
+                        index,
+                        Call {
+                            id: String::new(),
+                            name: String::new(),
+                            args: String::new(),
+                        },
+                    ));
                 }
                 let position = calls
                     .iter()
@@ -405,7 +434,11 @@ fn stream_openai(
         text,
         calls: calls
             .into_iter()
-            .map(|(_, c)| ToolCall { id: c.id, name: c.name, arguments: c.args })
+            .map(|(_, c)| ToolCall {
+                id: c.id,
+                name: c.name,
+                arguments: c.args,
+            })
             .collect(),
         stop,
         usage,
@@ -498,12 +531,16 @@ mod tests {
         ));
         // Zen gateway paths (e.g. TINYCODE_BASE_URL=https://opencode.ai/zen/go)
         // also require x-opencode-session.
-        assert!(is_opencode_gateway("https://opencode.ai/zen/go/v1/messages"));
+        assert!(is_opencode_gateway(
+            "https://opencode.ai/zen/go/v1/messages"
+        ));
         assert!(is_opencode_gateway(
             "https://opencode.ai/zen/go/chat/completions"
         ));
         assert!(is_opencode_gateway("https://OPENCODE.AI/zen/v1/messages"));
-        assert!(!is_opencode_gateway("https://api.openai.com/v1/chat/completions"));
+        assert!(!is_opencode_gateway(
+            "https://api.openai.com/v1/chat/completions"
+        ));
         assert!(!is_opencode_gateway("https://opencode.ai/docs/api"));
         assert!(!is_opencode_gateway("https://opencode.ai/console"));
     }

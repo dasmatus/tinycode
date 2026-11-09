@@ -39,7 +39,10 @@ impl Usage {
         }
         Usage {
             input_tokens: u.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
-            output_tokens: u.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0),
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
         }
     }
 }
@@ -101,7 +104,13 @@ pub fn record_to(path: &Path, rec: &TurnRecord) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("usage dir {}: {e}", parent.display()))?;
     }
-    let err: String = rec.error.as_deref().unwrap_or("").chars().take(MAX_ERR_CHARS).collect();
+    let err: String = rec
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(MAX_ERR_CHARS)
+        .collect();
     let mut line = json!({
         "ts": now_ms(),
         "provider": rec.provider,
@@ -117,9 +126,13 @@ pub fn record_to(path: &Path, rec: &TurnRecord) -> Result<(), String> {
     })
     .to_string();
     line.push('\n');
-    let mut file = OpenOptions::new().create(true).append(true).open(path)
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
         .map_err(|e| format!("usage file {}: {e}", path.display()))?;
-    file.write_all(line.as_bytes()).map_err(|e| format!("usage write: {e}"))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("usage write: {e}"))?;
     Ok(())
 }
 
@@ -153,8 +166,16 @@ pub fn aggregate(records: &[Value]) -> Vec<Aggregate> {
     let mut by_key: std::collections::BTreeMap<(String, String), Aggregate> =
         std::collections::BTreeMap::new();
     for rec in records {
-        let provider = rec.get("provider").and_then(Value::as_str).unwrap_or("").to_string();
-        let model = rec.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+        let provider = rec
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let model = rec
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let key = (provider.clone(), model.clone());
         if !by_key.contains_key(&key) {
             order.push(key.clone());
@@ -171,7 +192,10 @@ pub fn aggregate(records: &[Value]) -> Vec<Aggregate> {
         entry.input_tokens += rec.get("in").and_then(Value::as_u64).unwrap_or(0);
         entry.output_tokens += rec.get("out").and_then(Value::as_u64).unwrap_or(0);
     }
-    order.into_iter().map(|k| by_key.remove(&k).unwrap()).collect()
+    order
+        .into_iter()
+        .map(|k| by_key.remove(&k).unwrap())
+        .collect()
 }
 
 pub fn total(records: &[Value]) -> Aggregate {
@@ -183,8 +207,14 @@ pub fn total(records: &[Value]) -> Aggregate {
             .iter()
             .filter(|r| r.get("ok").and_then(Value::as_bool) == Some(false))
             .count() as u64,
-        input_tokens: records.iter().map(|r| r.get("in").and_then(Value::as_u64).unwrap_or(0)).sum(),
-        output_tokens: records.iter().map(|r| r.get("out").and_then(Value::as_u64).unwrap_or(0)).sum(),
+        input_tokens: records
+            .iter()
+            .map(|r| r.get("in").and_then(Value::as_u64).unwrap_or(0))
+            .sum(),
+        output_tokens: records
+            .iter()
+            .map(|r| r.get("out").and_then(Value::as_u64).unwrap_or(0))
+            .sum(),
     }
 }
 
@@ -256,33 +286,27 @@ pub fn cli(args: &[String]) -> i32 {
                 return 0;
             }
             "--json" => json_mode = true,
-            "--file" => {
-                match args.get(i + 1) {
-                    Some(v) => {
-                        file = PathBuf::from(v);
-                        i += 1;
-                    }
-                    None => return eprintln_error("usage: missing value for --file"),
+            "--file" => match args.get(i + 1) {
+                Some(v) => {
+                    file = PathBuf::from(v);
+                    i += 1;
                 }
-            }
-            "--since" => {
-                match args.get(i + 1) {
-                    Some(v) => {
-                        since = Some(v.clone());
-                        i += 1;
-                    }
-                    None => return eprintln_error("usage: missing value for --since"),
+                None => return eprintln_error("usage: missing value for --file"),
+            },
+            "--since" => match args.get(i + 1) {
+                Some(v) => {
+                    since = Some(v.clone());
+                    i += 1;
                 }
-            }
-            "--tail" => {
-                match args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
-                    Some(n) => {
-                        tail = Some(n);
-                        i += 1;
-                    }
-                    None => return eprintln_error("usage: --tail needs a number"),
+                None => return eprintln_error("usage: missing value for --since"),
+            },
+            "--tail" => match args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) => {
+                    tail = Some(n);
+                    i += 1;
                 }
-            }
+                None => return eprintln_error("usage: --tail needs a number"),
+            },
             other => return eprintln_error(&format!("usage: unknown option: {other}")),
         }
         i += 1;
@@ -318,19 +342,30 @@ pub fn cli(args: &[String]) -> i32 {
 
     if json_mode {
         for a in &aggs {
-            println!("{}", json!({
-                "provider": a.provider, "model": a.model, "runs": a.runs,
-                "failed": a.failed, "in_tokens": a.input_tokens, "out_tokens": a.output_tokens,
-            }));
+            println!(
+                "{}",
+                json!({
+                    "provider": a.provider, "model": a.model, "runs": a.runs,
+                    "failed": a.failed, "in_tokens": a.input_tokens, "out_tokens": a.output_tokens,
+                })
+            );
         }
-        println!("{}", json!({
-            "provider": "total", "model": "(all models)", "runs": tot.runs,
-            "failed": tot.failed, "in_tokens": tot.input_tokens, "out_tokens": tot.output_tokens,
-        }));
+        println!(
+            "{}",
+            json!({
+                "provider": "total", "model": "(all models)", "runs": tot.runs,
+                "failed": tot.failed, "in_tokens": tot.input_tokens, "out_tokens": tot.output_tokens,
+            })
+        );
         return 0;
     }
 
-    eprintln!("tinycode usage — {} ({} of {} records)", since.as_deref().unwrap_or("all time"), borrowed.len(), all.len());
+    eprintln!(
+        "tinycode usage — {} ({} of {} records)",
+        since.as_deref().unwrap_or("all time"),
+        borrowed.len(),
+        all.len()
+    );
     println!(
         "{:<14} {:<26} {:>6} {:>5} {:>10} {:>10}",
         "provider", "model", "runs", "fail", "in_tok", "out_tok"
@@ -375,15 +410,22 @@ mod tests {
     #[test]
     fn anthropic_usage_capture() {
         let mut state = AnthropicUsage::default();
-        Usage::from_anthropic_event(&json!({"type":"message_start","message":{"usage":{"input_tokens":19}}}), &mut state);
-        Usage::from_anthropic_event(&json!({"type":"message_delta","usage":{"output_tokens":3}}), &mut state);
+        Usage::from_anthropic_event(
+            &json!({"type":"message_start","message":{"usage":{"input_tokens":19}}}),
+            &mut state,
+        );
+        Usage::from_anthropic_event(
+            &json!({"type":"message_delta","usage":{"output_tokens":3}}),
+            &mut state,
+        );
         assert_eq!(state.input, 19);
         assert_eq!(state.output, 3);
     }
 
     #[test]
     fn openai_usage_capture() {
-        let u = Usage::from_openai_chunk(&json!({"usage":{"prompt_tokens":7,"completion_tokens":2}}));
+        let u =
+            Usage::from_openai_chunk(&json!({"usage":{"prompt_tokens":7,"completion_tokens":2}}));
         assert_eq!(u.input_tokens, 7);
         assert_eq!(u.output_tokens, 2);
         assert!(Usage::from_openai_chunk(&json!({"choices":[],"unused":true})).is_zero());
@@ -429,7 +471,10 @@ mod tests {
         assert_eq!(recs[0]["in"], 19);
         assert_eq!(recs[0]["provider"], "opencode-go");
         assert_eq!(recs[0]["ok"], true);
-        assert_eq!(recs[1]["err"].as_str().unwrap().chars().count(), MAX_ERR_CHARS);
+        assert_eq!(
+            recs[1]["err"].as_str().unwrap().chars().count(),
+            MAX_ERR_CHARS
+        );
         let _ = fs::remove_file(&path);
     }
 }

@@ -5,6 +5,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
+use std::ops::Not;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use tinycode::agent::{Agent, Event};
 use tinycode::config::{Config, ProviderKind};
 
+type CaptureSlot = Arc<Mutex<Option<(u32, String)>>>;
 
 struct TempDir(PathBuf);
 
@@ -34,7 +36,9 @@ fn tempdir(tag: &str) -> TempDir {
 
 /// HTTP/1.1 server that records each request body, then answers with the
 /// next scripted SSE response and closes the connection.
-fn mock_server(responses: Vec<String>) -> (SocketAddr, mpsc::Receiver<(String, serde_json::Value)>) {
+fn mock_server(
+    responses: Vec<String>,
+) -> (SocketAddr, mpsc::Receiver<(String, serde_json::Value)>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
     let addr = listener.local_addr().expect("addr");
     let (tx, rx) = mpsc::channel();
@@ -66,7 +70,8 @@ fn mock_server(responses: Vec<String>) -> (SocketAddr, mpsc::Receiver<(String, s
             }
             let mut body = vec![0u8; content_len];
             let _ = std::io::Read::read_exact(&mut reader, &mut body);
-            let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let parsed: serde_json::Value =
+                serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
             let reply = if served < total {
                 served += 1;
                 responses[served - 1].clone()
@@ -92,7 +97,10 @@ fn mock_server(responses: Vec<String>) -> (SocketAddr, mpsc::Receiver<(String, s
 fn openai_sse(deltas: Vec<serde_json::Value>) -> String {
     let mut out = String::new();
     for delta in deltas {
-        out.push_str(&format!("data: {}\n\n", serde_json::to_string(&delta).expect("json")));
+        out.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&delta).expect("json")
+        ));
     }
     out.push_str("data: [DONE]\n\n");
     out
@@ -101,7 +109,10 @@ fn openai_sse(deltas: Vec<serde_json::Value>) -> String {
 fn anthropic_sse(events: Vec<serde_json::Value>) -> String {
     let mut out = String::new();
     for event in events {
-        out.push_str(&format!("data: {}\n\n", serde_json::to_string(&event).expect("json")));
+        out.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&event).expect("json")
+        ));
     }
     out
 }
@@ -126,10 +137,9 @@ fn config(kind: ProviderKind, base_url: String, root: PathBuf) -> Config {
     }
 }
 
-fn capture_done() -> (
-    Arc<Mutex<Option<(u32, String)>>>,
-    impl FnMut(&Event),
-) {
+type CaptureSlot = Arc<Mutex<Option<(u32, String)>>>;
+
+fn capture_done() -> (CaptureSlot, impl FnMut(&Event)) {
     let slot = Arc::new(Mutex::new(None::<(u32, String)>));
     let slot2 = slot.clone();
     let reporter = move |event: &Event| {
@@ -173,7 +183,10 @@ fn agent_loop_openai_e2e() {
         "hello world",
         "split tool-call arguments were reassembled"
     );
-    assert_eq!(done.lock().expect("lock").as_ref().expect("done event").1, "wrote it.");
+    assert_eq!(
+        done.lock().expect("lock").as_ref().expect("done event").1,
+        "wrote it."
+    );
 
     let (_first_req, second_req) = {
         let first = requests.recv().expect("first request");
@@ -228,19 +241,33 @@ fn agent_loop_anthropic_e2e() {
     let (done, mut reporter) = capture_done();
     let code = agent.run(&mut reporter).expect("run to finish");
     assert_eq!(code, 0);
-    assert_eq!(fs::read_to_string(dir.0.join("hi.txt")).expect("file"), "hi");
-    assert_eq!(done.lock().expect("lock").as_ref().expect("done").1, "done summarising");
+    assert_eq!(
+        fs::read_to_string(dir.0.join("hi.txt")).expect("file"),
+        "hi"
+    );
+    assert_eq!(
+        done.lock().expect("lock").as_ref().expect("done").1,
+        "done summarising"
+    );
 
     let (first_path, first_req) = requests.recv().expect("first request");
     let (second_path, second_req) = requests.recv().expect("second request");
     let _ = (first_path, first_req);
     // first.1 contains the tools; second.0 is the request line.
-    assert!(second_path.contains("/v1/messages"), "anthropic endpoint: {second_path}");
+    assert!(
+        second_path.contains("/v1/messages"),
+        "anthropic endpoint: {second_path}"
+    );
     let result = second_req["messages"]
         .as_array()
         .expect("messages")
         .iter()
-        .find(|m| m["role"] == "user" && m["content"].as_array().map_or(false, |c| !c.is_empty() && c[0]["type"] == "tool_result"))
+        .find(|m| {
+            m["role"] == "user"
+                && m["content"]
+                    .as_array()
+                    .map_or(false, |c| !c.is_empty() && c[0]["type"] == "tool_result")
+        })
         .expect("anthropic tool_result inside a user message");
     assert_eq!(result["content"][0]["tool_use_id"], "toolu_1");
 }
@@ -261,7 +288,11 @@ fn max_turns_limit_stops_runaway_loops() {
     // 4 turns of read/x.txt loop, then... still looping; max_turns is 4.
     let (addr, _requests) = mock_server(vec![looping("c1"), looping("c2"), looping("c3")]);
 
-    let mut cfg = config(ProviderKind::OpenAi, format!("http://{addr}"), dir.0.clone());
+    let mut cfg = config(
+        ProviderKind::OpenAi,
+        format!("http://{addr}"),
+        dir.0.clone(),
+    );
     cfg.max_turns = 3;
     cfg.auto = false; // read is allowed without --auto anyway
     let mut agent = Agent::new(cfg).expect("agent");
@@ -273,7 +304,11 @@ fn max_turns_limit_stops_runaway_loops() {
     let file = agent.session_path().clone();
     let session: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(file).expect("session file")).expect("session");
-    assert_eq!(session["messages"].as_array().expect("msgs").len() >= 1, true);
+    assert!(session["messages"]
+        .as_array()
+        .expect("msgs")
+        .is_empty()
+        .not());
 }
 
 /// Usage capture: token counts reported by the provider end up as one
@@ -312,7 +347,7 @@ fn usage_records_openai_tokens() {
     assert_eq!(rec["out"], 3);
     assert_eq!(rec["ok"], true);
     assert_eq!(rec["turn"], 1);
-    assert!(rec["session"].as_str().map_or(false, |s| s.contains(".json")));
+    assert!(rec["session"].as_str().is_some_and(|s| s.contains(".json")));
 }
 
 /// Same expectation for the Anthropic dialect (message_start input
@@ -372,5 +407,5 @@ fn usage_records_failed_turns() {
     let rec: serde_json::Value =
         serde_json::from_str(text.lines().next().expect("one line")).expect("record");
     assert_eq!(rec["ok"], false);
-    assert!(rec["err"].as_str().map_or(false, |e| !e.is_empty()));
+    assert!(rec["err"].as_str().is_some_and(|e| !e.is_empty()));
 }

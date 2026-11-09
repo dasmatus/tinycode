@@ -9,13 +9,28 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub enum Event {
-    Started { session: String },
+    Started {
+        session: String,
+    },
     Turn(u32),
     Assistant(String),
-    ToolUse { name: String, input: String },
-    ToolResult { name: String, ok: bool, bytes: usize },
-    Done { text: String, turns: u32, session: String },
-    MaxTurns { session: String },
+    ToolUse {
+        name: String,
+        input: String,
+    },
+    ToolResult {
+        name: String,
+        ok: bool,
+        bytes: usize,
+    },
+    Done {
+        text: String,
+        turns: u32,
+        session: String,
+    },
+    MaxTurns {
+        session: String,
+    },
     Error(String),
 }
 
@@ -29,7 +44,11 @@ impl Event {
             Event::ToolResult { name, ok, bytes } => {
                 json!({"type": "tool_result", "name": name, "ok": ok, "bytes": bytes})
             }
-            Event::Done { text, turns, session } => {
+            Event::Done {
+                text,
+                turns,
+                session,
+            } => {
                 json!({"type": "done", "turns": turns, "text": text, "session": session})
             }
             Event::MaxTurns { session } => json!({"type": "max_turns", "session": session}),
@@ -60,8 +79,7 @@ impl Agent {
             None => store::new_path(&cfg.root).map_err(|e| -> Box<dyn Error> { e.into() })?,
         };
         let messages = if cfg.session_file.is_some() {
-            let session =
-                store::load(&session_path).map_err(|e| -> Box<dyn Error> { e.into() })?;
+            let session = store::load(&session_path).map_err(|e| -> Box<dyn Error> { e.into() })?;
             if session.provider != cfg.provider.name() {
                 return Err(format!(
                     "session was written with provider '{}', run with --provider {} (or --base-url/--model)",
@@ -75,7 +93,10 @@ impl Agent {
         };
         let system = system_prompt(&cfg);
         Ok(Self {
-            tool_ctx: ToolCtx { root: cfg.root.clone(), auto: cfg.auto },
+            tool_ctx: ToolCtx {
+                root: cfg.root.clone(),
+                auto: cfg.auto,
+            },
             cfg,
             system,
             messages,
@@ -122,23 +143,31 @@ impl Agent {
     /// Provider identifier for usage records: OpenCode ids flow through when
     /// the settings reuse resolved one ("opencode-go"), else the wire kind.
     fn provider_label(&self) -> String {
-        self.cfg.provider_id.clone().unwrap_or_else(|| self.cfg.provider.name().to_string())
+        self.cfg
+            .provider_id
+            .clone()
+            .unwrap_or_else(|| self.cfg.provider.name().to_string())
     }
 
     /// Returns the process exit code: 0 done, 1 hard error, 2 max turns hit.
     pub fn run(&mut self, report: &mut dyn FnMut(&Event)) -> Result<i32, Box<dyn Error>> {
-        report(&Event::Started { session: self.session_path.display().to_string() });
+        report(&Event::Started {
+            session: self.session_path.display().to_string(),
+        });
         let tools_spec = tools::definitions();
 
         // If this is a fresh session with no messages, add the task as the first user message
         if self.messages.is_empty() && !self.cfg.task.is_empty() {
-            self.messages.push(json!({"role": "user", "content": self.cfg.task.clone()}));
+            self.messages
+                .push(json!({"role": "user", "content": self.cfg.task.clone()}));
         }
 
         loop {
             self.turns += 1;
             if self.turns > self.cfg.max_turns {
-                report(&Event::MaxTurns { session: self.session_path.display().to_string() });
+                report(&Event::MaxTurns {
+                    session: self.session_path.display().to_string(),
+                });
                 return Ok(2);
             }
             report(&Event::Turn(self.turns));
@@ -147,15 +176,17 @@ impl Agent {
             let kind = self.cfg.provider;
             let started = Instant::now();
             let reply = match provider::stream(
-                kind,
-                &self.cfg.api_key,
-                &self.cfg.model,
-                &self.cfg.base_url,
-                &self.system,
-                &tools_spec,
-                &self.messages,
-                &self.session_tag(),
-                None,
+                provider::StreamCall {
+                    kind,
+                    api_key: &self.cfg.api_key,
+                    model: &self.cfg.model,
+                    base_url: &self.cfg.base_url,
+                    system: &self.system,
+                    tools: &tools_spec,
+                    messages: &self.messages,
+                    session_tag: &self.session_tag(),
+                    temperature: None,
+                },
                 |_delta: &str| {},
             ) {
                 Ok(reply) => {
@@ -167,7 +198,8 @@ impl Agent {
                     return Err(e);
                 }
             };
-            self.messages.push(provider::assistant_message(kind, &reply));
+            self.messages
+                .push(provider::assistant_message(kind, &reply));
             if !reply.text.is_empty() {
                 report(&Event::Assistant(reply.text.clone()));
             }
@@ -184,16 +216,24 @@ impl Agent {
 
             let mut results = Vec::new();
             for call in &reply.calls {
-                report(&Event::ToolUse { name: call.name.clone(), input: call.arguments.clone() });
+                report(&Event::ToolUse {
+                    name: call.name.clone(),
+                    input: call.arguments.clone(),
+                });
                 let out = tools::dispatch(&self.tool_ctx, &call.name, &call.arguments);
                 report(&Event::ToolResult {
                     name: call.name.clone(),
                     ok: out.ok,
                     bytes: out.output.len(),
                 });
-                results.push(ResultMsg { id: call.id.clone(), ok: out.ok, output: out.output });
+                results.push(ResultMsg {
+                    id: call.id.clone(),
+                    ok: out.ok,
+                    output: out.output,
+                });
             }
-            self.messages.extend(provider::tool_results_messages(kind, &results));
+            self.messages
+                .extend(provider::tool_results_messages(kind, &results));
             self.save()?;
         }
     }
@@ -230,7 +270,7 @@ fn system_prompt(cfg: &Config) -> String {
     )
 }
 
-fn compact_history(messages: &mut Vec<Value>) {
+fn compact_history(messages: &mut [Value]) {
     let total: usize = messages.iter().map(|m| m.to_string().len()).sum();
     if total <= COMPACT_THRESHOLD {
         return;
