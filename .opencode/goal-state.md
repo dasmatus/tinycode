@@ -22,4 +22,12 @@
 
 ## Blockers
 
-- none currently.
+- none.
+
+## Evidence
+
+- `cargo test --quiet` → 46/46 passing.
+- `cargo clippy --all-targets --all-features -- -D warnings` → no output.
+- `cargo fmt -- --check` → no output.
+- `cargo build --release` → release binary 4,318,368 bytes, below 5,242,880.
+- Local server smoke test: `/api/info`, `/api/model`, `POST /api/session`, `POST /api/session/ses_1/prompt` all returned 200 with OpenCode-shaped JSON.
