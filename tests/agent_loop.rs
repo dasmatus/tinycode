@@ -132,6 +132,7 @@ fn config(kind: ProviderKind, base_url: String, root: PathBuf) -> Config {
         quiet: true,
         session_file: None,
         system_prompt: None,
+        user_agent: None,
         task: "make a file".into(),
     }
 }

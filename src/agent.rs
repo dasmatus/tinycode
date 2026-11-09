@@ -186,6 +186,7 @@ impl Agent {
                     messages: &self.messages,
                     session_tag: &self.session_tag(),
                     temperature: None,
+                    user_agent: self.cfg.user_agent.as_deref(),
                 },
                 |_delta: &str| {},
             ) {

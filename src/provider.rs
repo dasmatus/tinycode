@@ -9,6 +9,11 @@ const MAX_TOKENS: u32 = 16384;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// OpenCode's client identification for its own gateways: the Console
+/// gates free-tier chat models on it. Shape per opencode's App.useragent;
+/// the version is opencode's current release, bumped alongside it.
+pub const OPENCODE_USER_AGENT: &str = "opencode/stable/1.19.5/tui";
+
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
     pub name: &'static str,
@@ -132,6 +137,10 @@ pub struct StreamCall<'a> {
     pub messages: &'a [Value],
     pub session_tag: &'a str,
     pub temperature: Option<f32>,
+    /// User-Agent override. `Some` sends exactly this on every provider
+    /// request; `None` keeps the defaults — OpenCode's identification on
+    /// its own gateways, ureq's default elsewhere.
+    pub user_agent: Option<&'a str>,
 }
 
 /// Stream one assistant turn. Tool-call argument chunks are reassembled
@@ -151,6 +160,7 @@ pub fn stream(args: StreamCall<'_>, on_text: impl FnMut(&str)) -> Result<Reply, 
         messages,
         session_tag,
         temperature,
+        user_agent,
     } = args;
     let url = chat_url(kind, base_url);
     let agent = ureq::AgentBuilder::new()
@@ -167,17 +177,21 @@ pub fn stream(args: StreamCall<'_>, on_text: impl FnMut(&str)) -> Result<Reply, 
     if kind == ProviderKind::OpenAi && !api_key.is_empty() {
         req = req.set("Authorization", &format!("Bearer {api_key}"));
     }
-    if is_opencode_gateway(url.as_str()) {
-        // Present as the OpenCode client on OpenCode's own gateway. The
-        // Console gates its free-tier models on this identification (the
-        // harnesses doc: free-tier chat models are only available from
-        // within OpenCode), and the shape is public in the opencode
-        // repository — App.useragent: `opencode/<channel>/<version>/<app>`
-        // — plus `x-opencode-client`. The version here is opencode's
-        // current release, not tinycode's; bump it alongside opencode.
+    // The User-Agent: an explicit override wins everywhere; otherwise
+    // OpenCode's gateways get OpenCode's identification (the Console gates
+    // its free-tier chat models on it — the harnesses doc: free-tier chat
+    // models are only available from within OpenCode), the shape being
+    // public in the opencode repository, App.useragent:
+    // `opencode/<channel>/<version>/<app>` plus `x-opencode-client`. The
+    // version tracks opencode's current release, not tinycode's own.
+    if let Some(ua) = user_agent.filter(|ua| !ua.is_empty()) {
+        req = req.set("User-Agent", ua);
+    } else if is_opencode_gateway(url.as_str()) {
         req = req
-            .set("User-Agent", "opencode/stable/1.19.5/tui")
+            .set("User-Agent", OPENCODE_USER_AGENT)
             .set("x-opencode-client", "tui");
+    }
+    if is_opencode_gateway(url.as_str()) {
         let tag = if session_tag.is_empty() {
             "tinycode"
         } else {
