@@ -7,7 +7,7 @@
 ## Milestones
 
 - [verified] CLI: no manual fallback; `run` and `serve` both clap-driven; remaining tests unaffected.
-- [verified] Server: listening line, server info, catalog basics, auth.
+- [verified] Server: listening line, server info, `/api/model` returns a non-empty catalog, auth.
 - [verified] Sessions: create/get/list/update/delete/active semantics.
 - [blocked] Events and history: prompt, message filing, SSE stream exposes text/tool events because `/api/model` is fixed first.
 - [pending] Model selection: valid model switch, unknown model error, provider mismatch handling.

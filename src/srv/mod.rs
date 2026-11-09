@@ -1,5 +1,9 @@
 pub mod http;
 pub mod routes;
+pub mod state;
+pub mod wire;
+
+pub use state::Room;
 
 use miette::Result;
 use std::net::{SocketAddr, TcpListener, TcpStream};
