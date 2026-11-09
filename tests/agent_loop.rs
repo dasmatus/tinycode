@@ -137,8 +137,6 @@ fn config(kind: ProviderKind, base_url: String, root: PathBuf) -> Config {
     }
 }
 
-type CaptureSlot = Arc<Mutex<Option<(u32, String)>>>;
-
 fn capture_done() -> (CaptureSlot, impl FnMut(&Event)) {
     let slot = Arc::new(Mutex::new(None::<(u32, String)>));
     let slot2 = slot.clone();
@@ -266,7 +264,7 @@ fn agent_loop_anthropic_e2e() {
             m["role"] == "user"
                 && m["content"]
                     .as_array()
-                    .map_or(false, |c| !c.is_empty() && c[0]["type"] == "tool_result")
+                    .is_some_and(|c| !c.is_empty() && c[0]["type"] == "tool_result")
         })
         .expect("anthropic tool_result inside a user message");
     assert_eq!(result["content"][0]["tool_use_id"], "toolu_1");

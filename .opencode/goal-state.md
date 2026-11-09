@@ -6,10 +6,10 @@
 
 ## Milestones
 
-- [pending] CLI: no manual fallback; `run` and `serve` both clap-driven; remaining tests unaffected.
-- [pending] Server: listening line, server info, catalog basics, auth.
-- [pending] Sessions: create/get/list/update/delete/active semantics.
-- [pending] Events and history: prompt, message filing, SSE stream exposes text/tool events.
+- [verified] CLI: no manual fallback; `run` and `serve` both clap-driven; remaining tests unaffected.
+- [verified] Server: listening line, server info, catalog basics, auth.
+- [verified] Sessions: create/get/list/update/delete/active semantics.
+- [blocked] Events and history: prompt, message filing, SSE stream exposes text/tool events because `/api/model` is fixed first.
 - [pending] Model selection: valid model switch, unknown model error, provider mismatch handling.
 - [pending] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
 - [pending] Release size: stripped release binary < 5,242,880 bytes.

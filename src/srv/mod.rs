@@ -65,6 +65,7 @@ impl ServerHandle {
                 let body = routes::server_info(&config, &addr);
                 http::write_json(&mut stream, 200, &body)
             }
+            ("GET", "/api/model") => http::write_json(&mut stream, 200, &routes::model_list()),
             _ => http::write_json(&mut stream, 404, &routes::not_found()),
         }
     }
