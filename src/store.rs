@@ -33,6 +33,13 @@ pub fn load(path: &Path) -> Result<Session, String> {
 /// torn session file.
 pub fn save(path: &Path, session: &Session) -> Result<(), String> {
     let data = serde_json::to_vec(session).map_err(|e| format!("session encode: {e}"))?;
+    // The agent's own run tool can take the sessions directory away mid-run
+    // (a `git clean -fdx`-style tidy-up sweeps untracked state, this
+    // directory included); a save recreates it instead of losing the
+    // session to it.
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("session dir {}: {e}", dir.display()))?;
+    }
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     fs::write(&tmp, &data).map_err(|e| format!("session {}: {e}", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| {
