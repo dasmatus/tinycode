@@ -1,18 +1,19 @@
 use clap::Parser;
 use miette::{IntoDiagnostic, Result};
 use tinycode::agent::Event;
-use tinycode::{agent, config, usage};
-use tinycode::cli::{Cli, Commands};
+use tinycode::cli::ServeArgs;
+use tinycode::{agent, cli, config, srv, usage};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = cli::Cli::parse();
+    dispatch(cli.command, cli.global).await
+}
 
-    match cli.command {
-        Some(Commands::Acp) => {
-            return tinycode::acp::run_acp().await;
-        }
-        Some(Commands::AcpClient(args)) => {
+async fn dispatch(command: Option<cli::Commands>, global: cli::GlobalArgs) -> Result<()> {
+    match command {
+        Some(cli::Commands::Acp) => tinycode::acp::run_acp().await,
+        Some(cli::Commands::AcpClient(args)) => {
             let server_cmd = match args.server {
                 Some(p) => p,
                 None => std::env::current_exe().into_diagnostic()?,
@@ -24,100 +25,84 @@ async fn main() -> Result<()> {
                 prompt: args.prompt,
                 handshake_only: args.handshake_only,
             };
-            return tinycode::acp_client::run_acp_client(cfg).await;
+            tinycode::acp_client::run_acp_client(cfg).await
         }
-        Some(Commands::Usage(args)) => {
+        Some(cli::Commands::Usage(args)) => {
             let _ = args;
-            let code = usage::cli(&[]); // usage might need adjustment
+            let code = usage::cli(&[]);
             std::process::exit(code);
         }
-        Some(Commands::Run(run_args)) => {
-            // Build config from args
-            let cfg = build_config(run_args, cli.global)?;
+        Some(cli::Commands::Run(run_args)) => {
+            let cfg = build_config(run_args, global)?;
             run_agent(cfg)?;
-            return Ok(());
+            Ok(())
         }
-        None => {
-            // Try to be compatible with old style - if no subcommand, maybe check if it's acp mode
-            // or just run as before
-            // For backward compat, maybe parse as old style
-        }
+        Some(cli::Commands::Serve(args)) => serve(args).await,
+        None => Err(miette::miette!("no task given; see --help")),
     }
+}
 
-    // Fallback to old behavior for backward compat
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(|a| a == "usage").unwrap_or(false) {
-        std::process::exit(usage::cli(&args[1..]));
+async fn serve(args: ServeArgs) -> Result<()> {
+    let config = srv::ServerConfig {
+        host: args.hostname,
+        port: args.port,
+        auto: args.auto,
+        version: cli::VERSION.to_string(),
+    };
+    let handle = srv::start_server(config)?;
+    if let Err(e) = handle.run().await {
+        return Err(miette::miette!("server error: {e}"));
     }
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        print!("{}", config::USAGE);
-        std::process::exit(0);
-    }
-    if args.is_empty() {
-        eprintln!("error: no task given\n\n{}", config::USAGE);
-        std::process::exit(2);
-    }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("tinycode {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    let cfg = config::parse_args(&args).map_err(|e| miette::miette!("{}", e))?;
-
-    run_agent(cfg)?;
     Ok(())
 }
 
-fn build_config(run_args: tinycode::cli::RunArgs, global: tinycode::cli::GlobalArgs) -> Result<config::Config> {
-    // Build config similar to parse_args but using clap args
-    let args = vec!["run".to_string()]; // dummy
-    // Easier to adapt - use parse_args style logic
-    let mut cfg_args: Vec<String> = vec!["run".to_string()];
-    if let Some(ref task) = run_args.task {
-        cfg_args.push(task.clone());
+fn build_config(run_args: cli::RunArgs, global: cli::GlobalArgs) -> Result<config::Config> {
+    // Consistent with clap, not a manual fallback.
+    let mut args: Vec<String> = vec![];
+    if let Some(t) = run_args.task {
+        args.push(t);
     }
-    if let Some(ref tf) = run_args.task_file {
-        cfg_args.push("--task-file".to_string());
-        cfg_args.push(tf.to_string_lossy().to_string());
+    if let Some(tf) = run_args.task_file {
+        args.push("--task-file".into());
+        args.push(tf.to_string_lossy().to_string());
     }
-    cfg_args.push("--root".to_string());
-    cfg_args.push(run_args.root.to_string_lossy().to_string());
-    if let Some(ref model) = run_args.model {
-        cfg_args.push("--model".to_string());
-        cfg_args.push(model.clone());
+    args.push("--root".into());
+    args.push(run_args.root.to_string_lossy().to_string());
+    if let Some(m) = run_args.model {
+        args.push("--model".into());
+        args.push(m);
     }
-    if let Some(ref provider) = run_args.provider {
-        cfg_args.push("--provider".to_string());
-        cfg_args.push(provider.clone());
+    if let Some(p) = run_args.provider {
+        args.push("--provider".into());
+        args.push(p);
     }
-    if let Some(ref base_url) = run_args.base_url {
-        cfg_args.push("--base-url".to_string());
-        cfg_args.push(base_url.clone());
+    if let Some(b) = run_args.base_url {
+        args.push("--base-url".into());
+        args.push(b);
     }
     if run_args.auto {
-        cfg_args.push("--auto".to_string());
+        args.push("--auto".into());
     }
-    cfg_args.push("--max-turns".to_string());
-    cfg_args.push(run_args.max_turns.to_string());
-    if let Some(ref session) = run_args.session {
-        cfg_args.push("--session".to_string());
-        cfg_args.push(session.to_string_lossy().to_string());
+    args.push("--max-turns".into());
+    args.push(run_args.max_turns.to_string());
+    if let Some(s) = run_args.session {
+        args.push("--session".into());
+        args.push(s.to_string_lossy().to_string());
     }
     if run_args.json {
-        cfg_args.push("--json".to_string());
+        args.push("--json".into());
     }
     if run_args.quiet {
-        cfg_args.push("--quiet".to_string());
+        args.push("--quiet".into());
     }
-    if let Some(ref spf) = global.system_prompt_file {
-        cfg_args.push("--system-prompt-file".to_string());
-        cfg_args.push(spf.to_string_lossy().to_string());
-    }
-    // Also handle global.system_prompt
-    let mut cfg = config::parse_args(&cfg_args).map_err(|e| miette::miette!("{}", e))?;
-    if let Some(sp) = global.system_prompt {
-        cfg.system_prompt = Some(sp);
-    }
+    let mut cfg = config::parse_args(&args).map_err(|e| miette::miette!("{}", e))?;
+    cfg.system_prompt = global.system_prompt.or_else(|| {
+        global.system_prompt_file.and_then(|path| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|s| s.trim_end().to_string())
+        })
+    });
     Ok(cfg)
 }
 

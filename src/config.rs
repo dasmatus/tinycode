@@ -1,6 +1,6 @@
+use serde_json::Value;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use serde_json::Value;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProviderKind {
@@ -165,7 +165,10 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
                 _ => 2,
             });
             for (name, entry) in entries {
-                let key = entry.get("key").and_then(Value::as_str).filter(|k| !k.is_empty());
+                let key = entry
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .filter(|k| !k.is_empty());
                 let Some(key) = key else { continue };
                 if env.api_key.is_none() {
                     if let Some(kind) = id_to_kind(name) {
@@ -192,7 +195,9 @@ pub fn load_opencode(config_path: &Path, auth_path: &Path) -> OpenCodeEnv {
             if let Some(providers) = cfg.get("provider").and_then(Value::as_object) {
                 let names = preferred_provider_names(providers);
                 for name in names {
-                    let Some(p) = providers.get(&name) else { continue };
+                    let Some(p) = providers.get(&name) else {
+                        continue;
+                    };
                     let kind = match id_to_kind(&name) {
                         Some(k) => k,
                         None => continue,
@@ -257,17 +262,19 @@ pub fn resolve_model_spec(raw: &str) -> Option<(ProviderKind, String, Option<Str
 /// XDG-aware default locations of OpenCode's configuration.
 pub fn opencode_paths() -> (PathBuf, PathBuf) {
     let dir = |env: &str, fallback: &str| {
-        std::env::var(env)
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(|h| PathBuf::from(h).join(fallback))
-                    .unwrap_or_default()
-            })
+        std::env::var(env).map(PathBuf::from).unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(fallback))
+                .unwrap_or_default()
+        })
     };
     (
-        dir("XDG_CONFIG_HOME", ".config").join("opencode").join("opencode.json"),
-        dir("XDG_DATA_HOME", ".local/share").join("opencode").join("auth.json"),
+        dir("XDG_CONFIG_HOME", ".config")
+            .join("opencode")
+            .join("opencode.json"),
+        dir("XDG_DATA_HOME", ".local/share")
+            .join("opencode")
+            .join("auth.json"),
     )
 }
 
@@ -365,8 +372,14 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             "--auto" => auto = true,
             "--json" => json_mode = true,
             "--quiet" => quiet = true,
-            "--model" | "--base-url" | "--provider" | "--root" | "--max-turns" | "-f"
-            | "--task-file" | "--system-prompt-file" => {
+            "--model"
+            | "--base-url"
+            | "--provider"
+            | "--root"
+            | "--max-turns"
+            | "-f"
+            | "--task-file"
+            | "--system-prompt-file" => {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| format!("missing value for {arg}"))?;
@@ -375,10 +388,9 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
                     "--model" => model = Some(value.clone()),
                     "--base-url" => base_url = Some(value.clone()),
                     "--provider" => {
-                        provider = Some(
-                            ProviderKind::parse(value)
-                                .ok_or_else(|| format!("unknown provider '{value}' (anthropic|openai)"))?,
-                        )
+                        provider = Some(ProviderKind::parse(value).ok_or_else(|| {
+                            format!("unknown provider '{value}' (anthropic|openai)")
+                        })?)
                     }
                     "--root" => root = Some(PathBuf::from(value)),
                     "--max-turns" => {
@@ -412,7 +424,7 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
     let task = match (task_file, task) {
         (Some(tf), _) => {
             let mut text = String::new();
-            if tf == PathBuf::from("-") {
+            if tf.as_os_str() == "-" {
                 std::io::stdin()
                     .read_to_string(&mut text)
                     .map_err(|e| format!("stdin: {e}"))?;
@@ -436,7 +448,9 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
             .map_err(|e| format!("--system-prompt-file {}: {e}", path.display()))?;
         Some(text.trim_end().to_string())
     } else {
-        std::env::var("TINYCODE_SYSTEM_PROMPT").ok().filter(|s| !s.is_empty())
+        std::env::var("TINYCODE_SYSTEM_PROMPT")
+            .ok()
+            .filter(|s| !s.is_empty())
     };
 
     let explicit_provider = provider.is_some();
@@ -446,8 +460,12 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
     // > OpenCode's own config (auth.json / opencode.json).
     let (oc_config_path, oc_auth_path) = opencode_paths();
     let (oc_config_path, oc_auth_path) = (
-        std::env::var("TINYCODE_OPENCODE_CONFIG").map(PathBuf::from).unwrap_or(oc_config_path),
-        std::env::var("TINYCODE_OPENCODE_AUTH").map(PathBuf::from).unwrap_or(oc_auth_path),
+        std::env::var("TINYCODE_OPENCODE_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or(oc_config_path),
+        std::env::var("TINYCODE_OPENCODE_AUTH")
+            .map(PathBuf::from)
+            .unwrap_or(oc_auth_path),
     );
     let oc = load_opencode(&oc_config_path, &oc_auth_path);
 
@@ -524,7 +542,8 @@ pub fn parse_args(args: &[String]) -> Result<Config, String> {
         .unwrap_or_else(|| provider.default_base_url().to_string());
 
     let root = root.unwrap_or_else(|| PathBuf::from("."));
-    let root = std::fs::canonicalize(&root).map_err(|e| format!("--root {}: {e}", root.display()))?;
+    let root =
+        std::fs::canonicalize(&root).map_err(|e| format!("--root {}: {e}", root.display()))?;
 
     Ok(Config {
         provider,

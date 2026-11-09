@@ -120,7 +120,12 @@ pub fn dispatch(ctx: &ToolCtx, name: &str, arguments: &str) -> ToolOut {
     } else {
         match serde_json::from_str(arguments) {
             Ok(v) => v,
-            Err(e) => return ToolOut { ok: false, output: format!("bad tool arguments: {e}") },
+            Err(e) => {
+                return ToolOut {
+                    ok: false,
+                    output: format!("bad tool arguments: {e}"),
+                }
+            }
         }
     };
     match name {
@@ -130,12 +135,18 @@ pub fn dispatch(ctx: &ToolCtx, name: &str, arguments: &str) -> ToolOut {
         "ls" => list_dir(ctx, &args),
         "grep" => grep(ctx, &args),
         "run" => run_cmd(ctx, &args),
-        other => ToolOut { ok: false, output: format!("unknown tool '{other}'") },
+        other => ToolOut {
+            ok: false,
+            output: format!("unknown tool '{other}'"),
+        },
     }
 }
 
 fn tool_error(msg: String) -> ToolOut {
-    ToolOut { ok: false, output: msg }
+    ToolOut {
+        ok: false,
+        output: msg,
+    }
 }
 
 /// Every tool path must stay inside the workspace root. When the path exists,
@@ -149,13 +160,17 @@ fn resolve(ctx: &ToolCtx, raw: &str) -> Result<PathBuf, ToolOut> {
     };
     let normalized = normalize(&path);
     if !normalized.starts_with(&ctx.root) {
-        return Err(tool_error(format!("path escapes the workspace root: {raw}")));
+        return Err(tool_error(format!(
+            "path escapes the workspace root: {raw}"
+        )));
     }
     if normalized.exists() {
         let canon = fs::canonicalize(&normalized)
             .map_err(|e| tool_error(format!("{}: {e}", normalized.display())))?;
         if !canon.starts_with(&ctx.root) {
-            return Err(tool_error(format!("path escapes the workspace root: {raw}")));
+            return Err(tool_error(format!(
+                "path escapes the workspace root: {raw}"
+            )));
         }
         return Ok(canon);
     }
@@ -185,7 +200,7 @@ fn opt_u64(args: &Value, key: &str) -> Option<u64> {
 }
 
 fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolOut> {
-    opt_str(args, key).map(|v| v).ok_or_else(|| tool_error(format!("missing required argument '{key}'")))
+    opt_str(args, key).ok_or_else(|| tool_error(format!("missing required argument '{key}'")))
 }
 
 fn rel(ctx: &ToolCtx, path: &Path) -> String {
@@ -219,7 +234,9 @@ fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOut {
         return tool_error(format!("{raw}: read failed"));
     }
     if buf.contains(&0) {
-        return tool_error(format!("{raw}: looks like a binary file; not usable as text"));
+        return tool_error(format!(
+            "{raw}: looks like a binary file; not usable as text"
+        ));
     }
     let text = String::from_utf8_lossy(&buf);
     let mut out = String::new();
@@ -230,16 +247,24 @@ fn read_file(ctx: &ToolCtx, args: &Value) -> ToolOut {
             continue;
         }
         if shown >= limit || out.len() > READ_CAP_BYTES {
-            out.push_str(&format!("[{raw}: output truncated at line {n}; use offset/limit]\n"));
+            out.push_str(&format!(
+                "[{raw}: output truncated at line {n}; use offset/limit]\n"
+            ));
             break;
         }
         shown += 1;
         out.push_str(&format!("{:>6}\t{}\n", n, line));
     }
     if out.is_empty() {
-        return ToolOut { ok: true, output: format!("{raw}: no lines in range") };
+        return ToolOut {
+            ok: true,
+            output: format!("{raw}: no lines in range"),
+        };
     }
-    ToolOut { ok: true, output: out }
+    ToolOut {
+        ok: true,
+        output: out,
+    }
 }
 
 fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOut {
@@ -258,7 +283,10 @@ fn write_file(ctx: &ToolCtx, args: &Value) -> ToolOut {
         }
     }
     match fs::write(&path, content.as_bytes()) {
-        Ok(()) => ToolOut { ok: true, output: format!("wrote {} bytes to {}", content.len(), rel(ctx, &path)) },
+        Ok(()) => ToolOut {
+            ok: true,
+            output: format!("wrote {} bytes to {}", content.len(), rel(ctx, &path)),
+        },
         Err(e) => tool_error(format!("{path_raw}: {e}")),
     }
 }
@@ -290,9 +318,16 @@ fn edit_file(ctx: &ToolCtx, args: &Value) -> ToolOut {
             "{path_raw}: old_string matches {count} times; provide a larger, more unique string or set replace_all"
         ));
     }
-    let updated = if replace_all { source.replace(&old, &new) } else { source.replacen(&old, &new, 1) };
+    let updated = if replace_all {
+        source.replace(&old, &new)
+    } else {
+        source.replacen(&old, &new, 1)
+    };
     match fs::write(&path, updated.as_bytes()) {
-        Ok(()) => ToolOut { ok: true, output: format!("replaced {count} occurrence(s) in {}", rel(ctx, &path)) },
+        Ok(()) => ToolOut {
+            ok: true,
+            output: format!("replaced {count} occurrence(s) in {}", rel(ctx, &path)),
+        },
         Err(e) => tool_error(format!("{path_raw}: {e}")),
     }
 }
@@ -321,7 +356,10 @@ fn list_dir(ctx: &ToolCtx, args: &Value) -> ToolOut {
         for entry in entries.flatten() {
             if out.lines().count() >= LS_LINE_CAP {
                 out.push_str("[ls truncated]\n");
-                return ToolOut { ok: true, output: out };
+                return ToolOut {
+                    ok: true,
+                    output: out,
+                };
             }
             let name = entry.file_name();
             match entry.file_type() {
@@ -343,7 +381,10 @@ fn list_dir(ctx: &ToolCtx, args: &Value) -> ToolOut {
     if out.is_empty() {
         out.push_str("(empty)\n");
     }
-    ToolOut { ok: true, output: out }
+    ToolOut {
+        ok: true,
+        output: out,
+    }
 }
 
 fn grep(ctx: &ToolCtx, args: &Value) -> ToolOut {
@@ -384,7 +425,12 @@ fn grep(ctx: &ToolCtx, args: &Value) -> ToolOut {
             };
             if hit {
                 matches += 1;
-                out.push_str(&format!("{}:{}: {}\n", rel(ctx, file), line_no, line.trim_end()));
+                out.push_str(&format!(
+                    "{}:{}: {}\n",
+                    rel(ctx, file),
+                    line_no,
+                    line.trim_end()
+                ));
                 if matches >= GREP_MATCH_CAP {
                     out.push_str(&format!("[grep truncated at {GREP_MATCH_CAP} matches]\n"));
                     break;
@@ -393,9 +439,15 @@ fn grep(ctx: &ToolCtx, args: &Value) -> ToolOut {
         }
     }
     if out.is_empty() {
-        return ToolOut { ok: true, output: format!("no matches for '{pattern}'") };
+        return ToolOut {
+            ok: true,
+            output: format!("no matches for '{pattern}'"),
+        };
     }
-    ToolOut { ok: true, output: out }
+    ToolOut {
+        ok: true,
+        output: out,
+    }
 }
 
 fn collect_files(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
@@ -445,7 +497,9 @@ fn run_cmd(ctx: &ToolCtx, args: &Value) -> ToolOut {
         Ok(c) => c,
         Err(e) => return e,
     };
-    let timeout = opt_u64(args, "timeout_sec").unwrap_or(120).clamp(1, RUN_TIMEOUT_CAP);
+    let timeout = opt_u64(args, "timeout_sec")
+        .unwrap_or(120)
+        .clamp(1, RUN_TIMEOUT_CAP);
 
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
@@ -474,15 +528,19 @@ fn run_cmd(ctx: &ToolCtx, args: &Value) -> ToolOut {
         if start.elapsed().as_secs_f64() > timeout as f64 {
             let _ = child.kill();
             killed = true;
-            break child.wait().map_err(|e| e);
+            break child.wait();
         }
         std::thread::sleep(poll);
     };
 
     // The process is gone at this point, so the pipes close soon; short
     // timeouts only protect against grandchildren still holding them open.
-    let stdout = rx_out.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-    let stderr = rx_err.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+    let stdout = rx_out
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_default();
+    let stderr = rx_err
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_default();
     let text = match (stdout.is_empty(), stderr.is_empty()) {
         (false, false) => format!("{stdout}\n--- stderr ---\n{stderr}"),
         (false, true) => stdout,
@@ -494,12 +552,21 @@ fn run_cmd(ctx: &ToolCtx, args: &Value) -> ToolOut {
         text.push_str(&format!("[timeout after {timeout}s, process killed]\n"));
     }
     match status {
-        Ok(st) if st.success() => ToolOut { ok: true, output: text },
+        Ok(st) if st.success() => ToolOut {
+            ok: true,
+            output: text,
+        },
         Ok(st) => {
             text.push_str(&format!("[exit {}]\n", st.code().unwrap_or(-1)));
-            ToolOut { ok: false, output: text }
+            ToolOut {
+                ok: false,
+                output: text,
+            }
         }
-        Err(e) => ToolOut { ok: false, output: format!("{command}: {e}") },
+        Err(e) => ToolOut {
+            ok: false,
+            output: format!("{command}: {e}"),
+        },
     }
 }
 

@@ -177,7 +177,10 @@ fn acp_resolves_opencode_go_model_selector() {
         assert_eq!(cfg.base_url, OPENCODE_GO_BASE_URL);
         assert_eq!(cfg.model, "kimi-k3");
         assert_eq!(cfg.api_key, "test-key");
-        assert!(cfg.auto, "ACP sessions run tools without interactive prompts");
+        assert!(
+            cfg.auto,
+            "ACP sessions run tools without interactive prompts"
+        );
     });
 }
 

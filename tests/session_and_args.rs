@@ -2,10 +2,10 @@
 //! edge cases. No test here may depend on ambient API keys, since tests
 //! run in parallel threads.
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tinycode::agent;
 use tinycode::config::{self, USAGE};
 use tinycode::store::{self, Session};
-use tinycode::agent;
 
 struct TempDir(PathBuf);
 
@@ -25,7 +25,7 @@ fn tempdir(tag: &str) -> TempDir {
     TempDir(path)
 }
 
-fn sample_session(root: &PathBuf) -> Session {
+fn sample_session(root: &Path) -> Session {
     Session {
         provider: "openai".into(),
         model: "test-model".into(),
@@ -47,7 +47,7 @@ fn session_save_load_roundtrip() {
     store::save(&path, &s).expect("save");
 
     // Atomic saves must not leave tmp files behind.
-    let tmp_leftovers: Vec<PathBuf> = fs::read_dir(&dir.0.join(".tinycode/sessions"))
+    let tmp_leftovers: Vec<PathBuf> = fs::read_dir(dir.0.join(".tinycode/sessions"))
         .expect("list.")
         .flatten()
         .map(|e| e.path())
@@ -171,7 +171,7 @@ fn usage_documents_the_t3_surface() {
 
 use tinycode::config::load_opencode;
 
-fn oc_paths(dir: &PathBuf, with_config: bool, with_auth: bool) -> (PathBuf, PathBuf) {
+fn oc_paths(dir: &Path, with_config: bool, with_auth: bool) -> (PathBuf, PathBuf) {
     let cfg_file = dir.join("opencode.json");
     let auth_file = dir.join("auth.json");
     if with_config {
@@ -194,7 +194,11 @@ fn auth_json_api_keys_are_picked_up() {
     .expect("auth fixture");
 
     let env = load_opencode(&cfg_path, &auth_path);
-    assert_eq!(env.provider, Some(tinycode::config::ProviderKind::Anthropic), "first listed provider wins");
+    assert_eq!(
+        env.provider,
+        Some(tinycode::config::ProviderKind::Anthropic),
+        "first listed provider wins"
+    );
     assert_eq!(env.api_key.as_deref(), Some("sk-ant-test"));
 }
 
@@ -211,7 +215,10 @@ fn opencode_default_model_and_provider_key_are_picked_up() {
     let env = load_opencode(&cfg_path, &auth_path);
     assert_eq!(
         env.model,
-        Some((tinycode::config::ProviderKind::OpenAi, "gpt-4.1-mini".to_string())),
+        Some((
+            tinycode::config::ProviderKind::OpenAi,
+            "gpt-4.1-mini".to_string()
+        )),
         "provider/model split"
     );
     assert_eq!(env.provider, Some(tinycode::config::ProviderKind::OpenAi));

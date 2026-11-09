@@ -45,7 +45,9 @@ fn acp_server_handshake_via_client() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("initialized") || stderr.contains("session created") || stderr.contains("ACP handshake OK"),
+        stderr.contains("initialized")
+            || stderr.contains("session created")
+            || stderr.contains("ACP handshake OK"),
         "expected handshake markers in stderr:\n{}",
         show(&out)
     );
@@ -59,15 +61,17 @@ fn acp_subcommand_is_exposed() {
     // the subcommand path far enough to not print the "no task given" legacy
     // error. We can't easily do a full server smoke test without a framed
     // client here, so we rely on acp_server_handshake_via_client for that.
-    let help = tinycode()
-        .args(["--help"])
-        .output()
-        .expect("run --help");
+    let help = tinycode().args(["--help"]).output().expect("run --help");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&help.stdout),
         String::from_utf8_lossy(&help.stderr)
     );
     assert!(text.contains("acp"), "help should mention acp:\n{text}");
-    assert!(text.contains("acp-client") || text.contains("AcpClient") || text.to_lowercase().contains("acp-client"), "help should mention acp-client:\n{text}");
+    assert!(
+        text.contains("acp-client")
+            || text.contains("AcpClient")
+            || text.to_lowercase().contains("acp-client"),
+        "help should mention acp-client:\n{text}"
+    );
 }

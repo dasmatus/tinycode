@@ -54,7 +54,11 @@ fn opencode_go_auth_json_resolves_gateway() {
     let json_text = r#"{"model": "opencode-go/glm-5.3-flash"}"#;
     let auth_text = r#"{"opencode-go": {"type": "api", "key": "sk-test-go"}}"#;
     let cfg = parse_with_config(json_text, auth_text);
-    assert_eq!(cfg.provider, ProviderKind::OpenAi, "opencode-go is OpenAI-compatible");
+    assert_eq!(
+        cfg.provider,
+        ProviderKind::OpenAi,
+        "opencode-go is OpenAI-compatible"
+    );
     assert_eq!(cfg.provider_id.as_deref(), Some("opencode-go"));
     assert_eq!(cfg.base_url, OPENCODE_GO_BASE_URL);
     assert_eq!(cfg.model, "glm-5.3-flash");
@@ -68,7 +72,11 @@ fn auth_json_plain_kinds_still_resolve_first() {
         "opencode-go": {"type": "api", "key": "sk-test-go"}
     }"#;
     let cfg = parse_with_config("{}", auth_text);
-    assert_eq!(cfg.provider, ProviderKind::Anthropic, "plain anthropic wins");
+    assert_eq!(
+        cfg.provider,
+        ProviderKind::Anthropic,
+        "plain anthropic wins"
+    );
     assert_eq!(cfg.api_key, "sk-ant-test");
     assert_eq!(cfg.base_url, ProviderKind::Anthropic.default_base_url());
 }
@@ -101,7 +109,11 @@ fn explicit_flags_override_reused_settings() {
     std::env::remove_var("TINYCODE_OPENCODE_AUTH");
     assert_eq!(cfg.model, "kimi-k3");
     assert_eq!(cfg.base_url, "http://127.0.0.1:9");
-    assert_eq!(cfg.provider_id.as_deref(), Some("opencode-go"), "id labels usage records even when overridden");
+    assert_eq!(
+        cfg.provider_id.as_deref(),
+        Some("opencode-go"),
+        "id labels usage records even when overridden"
+    );
 }
 
 #[test]
@@ -126,10 +138,22 @@ fn opencode_api_key_env_is_used_as_fallback() {
     // Restore
     std::env::remove_var("TINYCODE_OPENCODE_CONFIG");
     std::env::remove_var("TINYCODE_OPENCODE_AUTH");
-    match prev_tiny { Some(v) => std::env::set_var("TINYCODE_API_KEY", v), None => std::env::remove_var("TINYCODE_API_KEY") }
-    match prev_oc { Some(v) => std::env::set_var("OPENCODE_API_KEY", v), None => std::env::remove_var("OPENCODE_API_KEY") }
-    match prev_ant { Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v), None => std::env::remove_var("ANTHROPIC_API_KEY") }
-    match prev_oai { Some(v) => std::env::set_var("OPENAI_API_KEY", v), None => std::env::remove_var("OPENAI_API_KEY") }
+    match prev_tiny {
+        Some(v) => std::env::set_var("TINYCODE_API_KEY", v),
+        None => std::env::remove_var("TINYCODE_API_KEY"),
+    }
+    match prev_oc {
+        Some(v) => std::env::set_var("OPENCODE_API_KEY", v),
+        None => std::env::remove_var("OPENCODE_API_KEY"),
+    }
+    match prev_ant {
+        Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+        None => std::env::remove_var("ANTHROPIC_API_KEY"),
+    }
+    match prev_oai {
+        Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+        None => std::env::remove_var("OPENAI_API_KEY"),
+    }
     assert_eq!(cfg.api_key, "sk-opencode-test");
 }
 
