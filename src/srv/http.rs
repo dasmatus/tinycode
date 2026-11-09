@@ -76,5 +76,10 @@ pub fn write_json(
     stream
         .write_all(text.as_bytes())
         .map_err(|e| e.to_string())?;
-    stream.flush().map_err(|e| e.to_string())
+    stream.flush().map_err(|e| e.to_string())?;
+    // HTTP/1.1 keep-alive is not used here: a bounded request is one
+    // response. Partial readers can hang forever without an explicit close.
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| e.to_string())
 }

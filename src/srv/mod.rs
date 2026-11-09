@@ -9,7 +9,6 @@ use crate::srv::state::Response;
 use miette::Result;
 use serde_json::json;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -23,6 +22,8 @@ pub struct ServerHandle {
     pub local_addr: SocketAddr,
     pub listener: TcpListener,
     pub config: ServerConfig,
+    /// Shared room so sessions persist across HTTP connections.
+    pub room: std::sync::Arc<std::sync::Mutex<Room>>,
 }
 
 pub fn start_server(config: ServerConfig) -> Result<ServerHandle> {
@@ -34,7 +35,8 @@ pub fn start_server(config: ServerConfig) -> Result<ServerHandle> {
     Ok(ServerHandle {
         local_addr,
         listener,
-        config,
+        config: config.clone(),
+        room: std::sync::Arc::new(std::sync::Mutex::new(Room::new(config))),
     })
 }
 
@@ -77,7 +79,7 @@ pub fn server_once(
             200,
             routes::server_info(&config, &format!("http://{}:{}", config.host, config.port)),
         ),
-        ("GET", "/api/model") => room.model_list(),
+        ("GET", "/api/model") => Response::ok(200, routes::model_list()),
         _ => Response::ok(404, routes::not_found()),
     };
     http::write_json(&mut stream, response.status, &response.body)
@@ -88,8 +90,12 @@ impl ServerHandle {
     pub async fn run(self) -> Result<()> {
         // The listener blocks on `accept`, so keep it on its own OS thread:
         // tokio::spawn(worker tasks) stays responsive in tests and T3.
-        let listener = self.listener;
-        let config = self.config;
+        let ServerHandle {
+            listener,
+            config,
+            room,
+            ..
+        } = self;
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let stream = match stream {
@@ -100,8 +106,9 @@ impl ServerHandle {
                     }
                 };
                 let server_config = config.clone();
+                let room = room.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = Self::serve_once(server_config, stream) {
+                    if let Err(e) = Self::serve_once(room, server_config, stream) {
                         eprintln!("server request error: {e}");
                     }
                 });
@@ -117,14 +124,17 @@ impl ServerHandle {
                 Ok((stream, _)) => stream,
                 Err(e) => return Err(miette::miette!("accept error: {e}")),
             };
-            if let Err(e) = Self::serve_once(self.config.clone(), stream) {
+            if let Err(e) = Self::serve_once(self.room.clone(), self.config.clone(), stream) {
                 eprintln!("server request error: {e}");
             }
         }
     }
 
-    fn serve_once(config: ServerConfig, stream: TcpStream) -> Result<(), String> {
-        let room = Arc::new(std::sync::Mutex::new(Room::new(config.clone())));
+    fn serve_once(
+        room: std::sync::Arc<std::sync::Mutex<Room>>,
+        config: ServerConfig,
+        stream: TcpStream,
+    ) -> Result<(), String> {
         let mut room = room.lock().unwrap();
         server_once(&mut room, config, stream)
     }
