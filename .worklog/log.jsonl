@@ -30,3 +30,4 @@
 {"t":"2026-11-09T14:37:03+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo fmt -- --check","result":"0 diffs","status":"ok"}
 {"t":"2026-11-09T14:37:03+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"cargo build --release","result":"4293792 bytes under 5242880","status":"ok"}
 {"t":"2026-11-09T14:58:59+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"add session routes into serve_once","result":"route structures verified with tests","status":"ok"}
+{"t":"2026-11-09T15:06:52+01:00","agent":"opencode-go/kimi-k3.1-pro","did":"wire server routes for sessions and prompts through Room","result":"session routes now reach OpenCode-shaped state","status":"ok"}

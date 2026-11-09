@@ -5,11 +5,11 @@ pub mod wire;
 
 pub use state::Room;
 
+use crate::srv::state::Response;
 use miette::Result;
 use serde_json::json;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-
-use crate::srv::state::Response;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -123,16 +123,9 @@ impl ServerHandle {
         }
     }
 
-    fn serve_once(config: ServerConfig, mut stream: TcpStream) -> Result<(), String> {
-        let request = http::read_request(&mut stream)?;
-        match (request.method.as_str(), request.path.as_str()) {
-            ("GET", "/api/info") => {
-                let addr = format!("http://{}:{}", config.host, config.port);
-                let body = routes::server_info(&config, &addr);
-                http::write_json(&mut stream, 200, &body)
-            }
-            ("GET", "/api/model") => http::write_json(&mut stream, 200, &routes::model_list()),
-            _ => http::write_json(&mut stream, 404, &routes::not_found()),
-        }
+    fn serve_once(config: ServerConfig, stream: TcpStream) -> Result<(), String> {
+        let room = Arc::new(std::sync::Mutex::new(Room::new(config.clone())));
+        let mut room = room.lock().unwrap();
+        server_once(&mut room, config, stream)
     }
 }

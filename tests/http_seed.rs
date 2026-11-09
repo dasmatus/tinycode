@@ -15,7 +15,9 @@ fn config() -> ServerConfig {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_list_is_not_empty_for_a_configured_provider() {
+async fn model_list_reports_the_configured_model() {
+    std::env::set_var("TINYCODE_MODEL", "opencode-go/glm-5.3-flash");
+    std::env::set_var("TINYCODE_PROVIDER", "opencode-go");
     let handle = start_server(config()).expect("server");
     let addr = handle.local_addr;
     let accept_loop_handle = tokio::spawn(handle.run());
@@ -25,8 +27,8 @@ async fn model_list_is_not_empty_for_a_configured_provider() {
         "server accept loop should finish"
     );
     assert!(
-        response.contains("claude-sonnet-4-5"),
-        "model list should include a model: {response:?}"
+        response.contains("glm-5.3-flash"),
+        "model list should include the configured model: {response:?}"
     );
 }
 

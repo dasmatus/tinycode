@@ -19,12 +19,11 @@ pub fn model_list() -> Value {
         .as_deref()
         .and_then(resolve_model_spec)
         .map(|(_kind, provider, _base, model)| (provider, model));
-    let (provider_id, model_id, model_name) = match spec {
-        Some((provider, model)) => (provider, model.clone(), model),
+    let (provider_id, model_id) = match spec {
+        Some((provider, model)) => (provider, model.clone()),
         None => (
-            ProviderKind::Anthropic.name().to_string(),
-            ProviderKind::Anthropic.default_model().to_string(),
-            "tinycode default".to_string(),
+            ProviderKind::OpenAi.name().to_string(),
+            ProviderKind::OpenAi.default_model().to_string(),
         ),
     };
     json!({
@@ -34,7 +33,7 @@ pub fn model_list() -> Value {
             "modelID": model_id.clone(),
             "providerID": provider_id,
             "type": "chat",
-            "name": model_name,
+            "name": model_id,
             "capabilities": {"tools": true, "input": ["text"], "output": ["text"], "temperature": false},
             "variants": [],
             "time": {"released": 0},
