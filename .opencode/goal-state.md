@@ -13,7 +13,6 @@
 - [verified] Model selection: valid model switch, unknown model error, provider mismatch handling.
 - [pending] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
 - [verified] Release size: stripped release binary < 5,242,880 bytes.
-
 ## Key decisions
 
 - Target OpenCode 2 protocol. At version 2.0.18, T3 uses OpenCode 2 exclusively.

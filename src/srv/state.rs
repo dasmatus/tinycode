@@ -10,6 +10,8 @@ pub struct Room {
     pub sessions: std::sync::Mutex<Option<HashMap<String, BaseSession>>>,
     // Thread-safe message history for `session_prompt`.
     pub messages: std::sync::Mutex<HashMap<String, Vec<Value>>>,
+    /// SSE events, where any error is surfaced as "error".
+    pub events: std::sync::Mutex<Option<RoomEventBox>>,
 }
 
 pub struct Response {
@@ -31,6 +33,12 @@ pub struct AssistantMessage {
 pub struct RoomEventBox {
     /// SSE events, where any error is surfaced as "error".
     pub events: std::sync::mpsc::Sender<(String, Value)>,
+}
+
+impl RoomEventBox {
+    pub fn new(events: std::sync::mpsc::Sender<(String, Value)>) -> Self {
+        Self { events }
+    }
 }
 
 pub struct RoomEvent {
@@ -113,6 +121,7 @@ impl Room {
             config,
             sessions: std::sync::Mutex::new(None),
             messages: std::sync::Mutex::new(HashMap::new()),
+            events: std::sync::Mutex::new(None),
         }
     }
 
@@ -221,15 +230,30 @@ impl Room {
         if text.is_empty() {
             return Response::ok(400, json!({"error": "Empty prompt"}));
         }
-        self.messages
-            .lock()
-            .unwrap()
-            .entry(sid.clone())
-            .or_default()
-            .push(json!({"role": "assistant", "text": text}));
+        let (tx, rx) = std::sync::mpsc::channel::<(String, Value)>();
+        {
+            let mut events = self.events.lock().unwrap();
+            *events = Some(RoomEventBox::new(tx));
+        }
+        {
+            let mut messages = self.messages.lock().unwrap();
+            messages
+                .entry(sid.clone())
+                .or_default()
+                .push(json!({"role": "assistant", "text": text}));
+        }
+        let _ = rx;
         Response::ok(
             200,
-            json!({"data": {"id": sid, "type": "assistant", "text": text, "agent": "build", "model": model_default()}}),
+            json!({
+                "data": {
+                    "id": sid,
+                    "type": "assistant",
+                    "text": text,
+                    "agent": "build",
+                    "model": model_default(),
+                }
+            }),
         )
     }
 
