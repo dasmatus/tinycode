@@ -44,15 +44,18 @@ async fn dispatch(command: Option<cli::Commands>, global: cli::GlobalArgs) -> Re
 
 async fn serve(args: ServeArgs) -> Result<()> {
     let config = srv::ServerConfig {
-        host: args.hostname,
+        host: args.hostname.clone(),
         port: args.port,
         auto: args.auto,
         version: cli::VERSION.to_string(),
     };
     let handle = srv::start_server(config)?;
-    if let Err(e) = handle.run().await {
-        return Err(miette::miette!("server error: {e}"));
-    }
+    println!(
+        "opencode server listening on http://{}:{}",
+        args.hostname,
+        handle.local_addr.port()
+    );
+    handle.run_forever().await?;
     Ok(())
 }
 
