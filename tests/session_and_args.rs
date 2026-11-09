@@ -63,6 +63,18 @@ fn session_save_load_roundtrip() {
 }
 
 #[test]
+fn save_recreates_a_sessions_directory_the_agent_removed() {
+    let dir = tempdir("heal");
+    let path = store::new_path(&dir.0).expect("new session path");
+    // The agent's run tool tidying the tree (git clean -fdx and friends)
+    // takes the untracked sessions directory with it mid-run.
+    fs::remove_dir_all(dir.0.join(".tinycode")).expect("remove sessions dir");
+    store::save(&path, &sample_session(&dir.0)).expect("save heals the missing dir");
+    let loaded = store::load(&path).expect("load");
+    assert_eq!(loaded.provider, "openai");
+}
+
+#[test]
 fn agent_guards_session_provider_mismatch() {
     let dir = tempdir("mismatch");
     let root = fs::canonicalize(&dir.0).expect("canonicalize");
