@@ -7,10 +7,10 @@
 ## Milestones
 
 - [verified] CLI: no manual fallback; `run` and `serve` both clap-driven; remaining tests unaffected.
-- [verified] Server: listening line, server info, `/api/model` returns a non-empty catalog, auth.
+- [verified] Server: listening line, server info, `/api/model`, `/api/provider`, `/api/agent`, skills/commands, and auth are catalog-shaped.
 - [verified] Sessions: create/get/list/update/delete/active semantics.
-- [blocked] Events and history: prompt, message filing, SSE stream exposes text/tool events because `/api/model` is fixed first.
-- [pending] Model selection: valid model switch, unknown model error, provider mismatch handling.
+- [verified] Events and history: prompt, message filing, SSE stream exposes text/tool events.
+- [verified] Model selection: valid model switch, unknown model error, provider mismatch handling.
 - [pending] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
 - [pending] Release size: stripped release binary < 5,242,880 bytes.
 
