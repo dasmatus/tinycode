@@ -12,7 +12,7 @@
 - [verified] Events and history: prompt, message filing, SSE stream exposes text/tool events.
 - [verified] Model selection: valid model switch, unknown model error, provider mismatch handling.
 - [pending] Integration: client-driven end-to-end T3/Shroom surface completes chat flow.
-- [pending] Release size: stripped release binary < 5,242,880 bytes.
+- [verified] Release size: stripped release binary < 5,242,880 bytes.
 
 ## Key decisions
 
